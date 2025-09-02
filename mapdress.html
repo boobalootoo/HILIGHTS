@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Address Map Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    #map { height: 600px; }
+  </style>
+</head>
+<body class="bg-gray-100 p-6">
+  <div class="max-w-5xl mx-auto bg-white shadow rounded-lg p-6">
+    <h1 class="text-2xl font-bold mb-4">Upload or Enter Addresses to View on Map</h1>
+
+    <p class="text-sm text-gray-600 mb-4">
+      Format: <code>address number,street name,postcode</code><br>
+      Example: <em>10, Downing Street, SW1A 2AA</em>
+    </p>
+
+    <!-- Manual entry -->
+    <div class="mb-4">
+      <label for="manualInput" class="block text-sm font-medium mb-1">Enter an address:</label>
+      <input type="text" id="manualInput" class="w-full border p-2 rounded mb-2" placeholder="221B, Baker Street, NW1 6XE">
+      <button id="manualBtn" class="px-4 py-2 bg-blue-600 text-white rounded">Add Address</button>
+    </div>
+
+    <!-- File upload -->
+    <div class="mb-4">
+      <label for="fileInput" class="block text-sm font-medium mb-1">Upload file (.txt or .csv):</label>
+      <input type="file" id="fileInput" class="block w-full border p-2 rounded" accept=".txt,.csv" />
+    </div>
+
+    <button id="clearBtn" class="mb-4 px-4 py-2 bg-gray-200 rounded">Clear Map</button>
+
+    <div id="map" class="rounded border"></div>
+    <div id="status" class="mt-4 text-sm text-gray-700"></div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const manualInput = document.getElementById('manualInput');
+    const manualBtn = document.getElementById('manualBtn');
+    const statusEl = document.getElementById('status');
+    const clearBtn = document.getElementById('clearBtn');
+
+    // Initialize map
+    const map = L.map('map').setView([54.0, -2.0], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    let markers = [];
+
+    // Geocode one address
+    async function geocodeAddress(address) {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`;
+      try {
+        const resp = await fetch(url, { headers: { "Accept-Language": "en" } });
+        const data = await resp.json();
+        if (data.length > 0) {
+          return {
+            lat: parseFloat(data[0].lat),
+            lon: parseFloat(data[0].lon),
+            display: data[0].display_name
+          };
+        }
+      } catch (err) {
+        console.error("Geocoding failed:", err);
+      }
+      return null;
+    }
+
+    // Add a marker to the map
+    function addMarker(result, address) {
+      const marker = L.marker([result.lat, result.lon]).addTo(map)
+        .bindPopup(`<strong>${address}</strong><br>${result.display}`);
+      markers.push(marker);
+      return [result.lat, result.lon];
+    }
+
+    // Manual address entry
+    manualBtn.addEventListener('click', async () => {
+      const address = manualInput.value.trim();
+      if (!address) {
+        statusEl.textContent = "Please enter an address.";
+        return;
+      }
+      statusEl.textContent = `Looking up: ${address}`;
+      const result = await geocodeAddress(address);
+      if (result) {
+        addMarker(result, address);
+        map.setView([result.lat, result.lon], 16);
+        statusEl.textContent = "Address added!";
+      } else {
+        statusEl.textContent = "No results found for that address.";
+      }
+    });
+
+    // File upload
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
+
+      statusEl.textContent = `Processing ${lines.length} addresses...`;
+
+      let bounds = [];
+      for (let i = 0; i < lines.length; i++) {
+        const address = lines[i];
+        statusEl.textContent = `Geocoding (${i+1}/${lines.length}): ${address}`;
+        const result = await geocodeAddress(address);
+        if (result) {
+          bounds.push(addMarker(result, address));
+        }
+        await new Promise(r => setTimeout(r, 1000)); // throttle for Nominatim
+      }
+
+      if (bounds.length > 0) {
+        map.fitBounds(bounds);
+      }
+      statusEl.textContent = "Done!";
+    });
+
+    // Clear map
+    clearBtn.addEventListener('click', () => {
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+      statusEl.textContent = "Map cleared.";
+      map.setView([54.0, -2.0], 5);
+    });
+  </script>
+</body>
+</html>
