@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML Script Loader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        .container-wrapper {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 12rem);
+            resize: vertical;
+            overflow: auto;
+        }
+        
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background-color: #f7f7f7;
+        }
+
+        .resize-handle {
+            height: 10px;
+            cursor: ns-resize;
+            background-color: #e0e0e0;
+            transition: background-color 0.2s;
+            touch-action: none; /* For mobile dragging */
+        }
+        
+        .resize-handle:hover {
+            background-color: #a0a0a0;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 min-h-screen flex flex-col items-center">
+
+    <div class="max-w-4xl w-full bg-white rounded-lg shadow-xl p-6 mb-4">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-4">HTML Script Loader</h1>
+        <p class="text-center text-gray-600 mb-6">Load two HTML scripts from URLs and view them with a resizable barrier. Then, copy the combined HTML code.</p>
+
+        <div class="flex flex-col md:flex-row gap-4 mb-4">
+            <div class="flex-1">
+                <label for="url1" class="block text-sm font-medium text-gray-700 mb-1">URL to script 1</label>
+                <input type="url" id="url1" placeholder="https://raw.githubusercontent.com/user/repo/file1.html" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200">
+            </div>
+            <div class="flex-1">
+                <label for="url2" class="block text-sm font-medium text-gray-700 mb-1">URL to script 2</label>
+                <input type="url" id="url2" placeholder="https://raw.githubusercontent.com/user/repo/file2.html" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200">
+            </div>
+        </div>
+        <div class="flex justify-center mb-6">
+            <button id="loadBtn" class="px-6 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-200">
+                Load Scripts
+            </button>
+        </div>
+
+        <div id="containerWrapper" class="container-wrapper overflow-hidden border border-gray-300 rounded-md shadow-inner">
+            <div id="container1" class="flex-grow flex flex-col justify-center items-center p-4">
+                <p class="text-gray-500 text-center">Page 1 will appear here.</p>
+            </div>
+            <div id="resizer" class="resize-handle"></div>
+            <div id="container2" class="flex-grow flex flex-col justify-center items-center p-4">
+                <p class="text-gray-500 text-center">Page 2 will appear here.</p>
+            </div>
+        </div>
+
+        <div class="mt-6 flex justify-center">
+            <button id="copyBtn" class="px-6 py-2 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-200">
+                Copy Combined Script
+            </button>
+        </div>
+        <div id="messageBox" class="mt-4 text-center text-sm font-medium text-gray-700 hidden"></div>
+    </div>
+
+    <script>
+        const url1Input = document.getElementById('url1');
+        const url2Input = document.getElementById('url2');
+        const loadBtn = document.getElementById('loadBtn');
+        const container1 = document.getElementById('container1');
+        const container2 = document.getElementById('container2');
+        const resizer = document.getElementById('resizer');
+        const copyBtn = document.getElementById('copyBtn');
+        const messageBox = document.getElementById('messageBox');
+        
+        let isResizing = false;
+
+        function showMessage(msg, type = 'info') {
+            messageBox.textContent = msg;
+            messageBox.classList.remove('hidden', 'text-red-500', 'text-green-500', 'text-gray-700');
+            if (type === 'error') {
+                messageBox.classList.add('text-red-500');
+            } else if (type === 'success') {
+                messageBox.classList.add('text-green-500');
+            } else {
+                messageBox.classList.add('text-gray-700');
+            }
+        }
+
+        async function fetchHtml(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return await response.text();
+            } catch (e) {
+                console.error("Fetch error:", e);
+                showMessage(`Could not load URL: ${url}`, 'error');
+                return null;
+            }
+        }
+
+        async function loadScripts() {
+            container1.innerHTML = `<p class="text-gray-500 text-center animate-pulse">Loading...</p>`;
+            container2.innerHTML = `<p class="text-gray-500 text-center animate-pulse">Loading...</p>`;
+            showMessage("Loading scripts...", 'info');
+
+            const url1 = url1Input.value.trim();
+            const url2 = url2Input.value.trim();
+
+            if (!url1 && !url2) {
+                showMessage("Please enter at least one URL.", 'error');
+                container1.innerHTML = `<p class="text-gray-500 text-center">Page 1 will appear here.</p>`;
+                container2.innerHTML = `<p class="text-gray-500 text-center">Page 2 will appear here.</p>`;
+                return;
+            }
+
+            let html1 = url1 ? await fetchHtml(url1) : null;
+            let html2 = url2 ? await fetchHtml(url2) : null;
+
+            if (html1) {
+                const iframe1 = document.createElement('iframe');
+                iframe1.srcdoc = html1;
+                container1.innerHTML = '';
+                container1.appendChild(iframe1);
+            } else {
+                container1.innerHTML = `<p class="text-gray-500 text-center">Failed to load Page 1.</p>`;
+            }
+
+            if (html2) {
+                const iframe2 = document.createElement('iframe');
+                iframe2.srcdoc = html2;
+                container2.innerHTML = '';
+                container2.appendChild(iframe2);
+            } else {
+                container2.innerHTML = `<p class="text-gray-500 text-center">Failed to load Page 2.</p>`;
+            }
+
+            showMessage("Scripts loaded successfully!", 'success');
+        }
+
+        function createCombinedScript() {
+            const html1 = container1.querySelector('iframe')?.srcdoc || `<p>Page 1 content not loaded.</p>`;
+            const html2 = container2.querySelector('iframe')?.srcdoc || `<p>Page 2 content not loaded.</p>`;
+
+            const combinedHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Combined Pages</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+        .combined-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        .page-container {
+            width: 100%;
+            overflow: auto;
+        }
+        .resizer {
+            height: 10px;
+            background-color: #a0a0a0;
+            cursor: ns-resize;
+            touch-action: none;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="combined-container">
+        <div id="page1" class="page-container" style="flex-grow: 1;">
+            <iframe srcdoc="${htmlEscape(html1)}"></iframe>
+        </div>
+        <div id="resizer" class="resizer"></div>
+        <div id="page2" class="page-container" style="flex-grow: 1;">
+            <iframe srcdoc="${htmlEscape(html2)}"></iframe>
+        </div>
+    </div>
+    <script>
+        const resizer = document.getElementById('resizer');
+        const page1 = document.getElementById('page1');
+        const page2 = document.getElementById('page2');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            document.body.style.cursor = 'ns-resize';
+            e.preventDefault();
+        });
+        resizer.addEventListener('touchstart', (e) => {
+            isResizing = true;
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const totalHeight = window.innerHeight;
+            const topHeight = e.clientY;
+            const bottomHeight = totalHeight - topHeight - resizer.offsetHeight;
+
+            if (topHeight > 50 && bottomHeight > 50) {
+                page1.style.height = \`\${topHeight}px\`;
+                page2.style.height = \`\${bottomHeight}px\`;
+                page1.style.flexGrow = '0';
+                page2.style.flexGrow = '0';
+            }
+        });
+        document.addEventListener('touchmove', (e) => {
+            if (!isResizing) return;
+            const totalHeight = window.innerHeight;
+            const topHeight = e.touches[0].clientY;
+            const bottomHeight = totalHeight - topHeight - resizer.offsetHeight;
+
+            if (topHeight > 50 && bottomHeight > 50) {
+                page1.style.height = \`\${topHeight}px\`;
+                page2.style.height = \`\${bottomHeight}px\`;
+                page1.style.flexGrow = '0';
+                page2.style.flexGrow = '0';
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isResizing = false;
+            document.body.style.cursor = '';
+        });
+        document.addEventListener('touchend', () => {
+            isResizing = false;
+        });
+    <\/script>
+</body>
+</html>
+            `;
+            return combinedHtml;
+        }
+
+        function htmlEscape(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        function copyToClipboard() {
+            const combinedHtml = createCombinedScript();
+            const el = document.createElement('textarea');
+            el.value = combinedHtml;
+            el.setAttribute('readonly', '');
+            el.style.position = 'absolute';
+            el.style.left = '-9999px';
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            showMessage("Combined script copied to clipboard!", 'success');
+        }
+        
+        loadBtn.addEventListener('click', loadScripts);
+        copyBtn.addEventListener('click', copyToClipboard);
+
+        // Resizing logic for the main app
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            document.body.style.cursor = 'ns-resize';
+            e.preventDefault();
+        });
+        resizer.addEventListener('touchstart', (e) => {
+            isResizing = true;
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const containerWrapper = document.getElementById('containerWrapper');
+            const totalHeight = containerWrapper.offsetHeight;
+            const topHeight = e.clientY - containerWrapper.getBoundingClientRect().top;
+            
+            if (topHeight > 50 && totalHeight - topHeight > 50) {
+                container1.style.flexGrow = '0';
+                container2.style.flexGrow = '0';
+                container1.style.height = `${topHeight}px`;
+                container2.style.height = `${totalHeight - topHeight}px`;
+            }
+        });
+        document.addEventListener('touchmove', (e) => {
+            if (!isResizing) return;
+            const containerWrapper = document.getElementById('containerWrapper');
+            const totalHeight = containerWrapper.offsetHeight;
+            const topHeight = e.touches[0].clientY - containerWrapper.getBoundingClientRect().top;
+            
+            if (topHeight > 50 && totalHeight - topHeight > 50) {
+                container1.style.flexGrow = '0';
+                container2.style.flexGrow = '0';
+                container1.style.height = `${topHeight}px`;
+                container2.style.height = `${totalHeight - topHeight}px`;
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isResizing = false;
+            document.body.style.cursor = '';
+        });
+        document.addEventListener('touchend', () => {
+            isResizing = false;
+        });
+
+    </script>
+</body>
+</html>
