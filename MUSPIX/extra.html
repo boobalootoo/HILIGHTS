@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image to Sound Synthesizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 2rem;
+            overflow: auto;
+        }
+        .container {
+            background-color: #16213e;
+            padding: 2.5rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.4);
+            text-align: center;
+            width: 100%;
+            max-width: 900px;
+        }
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            border: 2px solid #5a5a72;
+            border-radius: 1rem;
+            background-color: #222222;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            touch-action: none;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #drawingCanvas {
+            z-index: 1;
+        }
+        #cursorCanvas {
+            z-index: 2;
+            pointer-events: none;
+        }
+        .btn {
+            background-color: #8e44ad;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.3s;
+        }
+        .btn:hover {
+            background-color: #9b59b6;
+            transform: translateY(-2px);
+        }
+        #loadingMessage {
+            color: #9CA3AF;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .slider-container {
+            margin: 1.5rem 0;
+            text-align: left;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #2d2d4d;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+            border-radius: 4px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #8e44ad;
+            cursor: pointer;
+            border-radius: 50%;
+            transition: background 0.3s, transform 0.3s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: #9b59b6;
+            transform: scale(1.1);
+        }
+        .file-input {
+            margin-bottom: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .file-input-label {
+            background-color: #3498db;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.3s;
+        }
+        .file-input-label:hover {
+            background-color: #2980b9;
+            transform: translateY(-2px);
+        }
+        .file-input input[type="file"] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-4xl font-bold mb-4 text-white">Image to Sound Synthesizer</h1>
+        <p class="text-gray-400 mb-6 max-w-md mx-auto">
+            Upload an image or draw on the canvas to turn its pixel data into a synthesized sound. Horizontal pixels represent time, and vertical pixels represent frequency.
+        </p>
+
+        <div class="file-input">
+            <label for="imageUpload" class="file-input-label">Upload Image</label>
+            <input type="file" id="imageUpload" accept="image/*">
+        </div>
+
+        <div class="flex justify-center items-center my-4 space-x-4">
+            <input type="color" id="colorPicker" value="#FFFFFF" class="rounded-full w-12 h-12 p-1 border-2 border-gray-400 cursor-pointer">
+            <div class="flex flex-col items-center">
+                <span class="text-sm text-gray-400">Brush Size</span>
+                <input type="range" id="brushSizeSlider" min="1" max="50" value="10" class="w-32">
+            </div>
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>Horizontal Pixels</span>
+                <span id="h-value">32</span>
+            </div>
+            <input type="range" id="h-slider" min="16" max="128" value="32">
+        </div>
+        
+        <div class="canvas-container mt-6">
+            <canvas id="drawingCanvas"></canvas>
+            <canvas id="cursorCanvas"></canvas>
+        </div>
+
+        <div class="mt-8 flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 justify-center items-center">
+            <button id="playPauseBtn" class="btn">▶️ Play</button>
+            <button id="downloadBtn" class="btn bg-blue-600 hover:bg-blue-700">Download</button>
+            <button id="clearBtn" class="btn bg-gray-600 hover:bg-gray-700">Clear</button>
+        </div>
+        <p id="loadingMessage" class="hidden text-center text-sm mt-4"></p>
+    </div>
+
+    <script>
+        const hSlider = document.getElementById('h-slider');
+        const hValue = document.getElementById('h-value');
+        const imageUpload = document.getElementById('imageUpload');
+        const colorPicker = document.getElementById('colorPicker');
+        const brushSizeSlider = document.getElementById('brushSizeSlider');
+
+        const drawingCanvas = document.getElementById('drawingCanvas');
+        const drawingCtx = drawingCanvas.getContext('2d');
+        const cursorCanvas = document.getElementById('cursorCanvas');
+        const cursorCtx = cursorCanvas.getContext('2d');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const loadingMessage = document.getElementById('loadingMessage');
+        const canvasContainer = document.querySelector('.canvas-container');
+
+        let GRID_WIDTH;
+        let GRID_HEIGHT;
+        let gridState = [];
+
+        let audioContext;
+        let audioBuffer;
+        let audioBufferSource;
+        let isPlaying = false;
+        
+        const BACKGROUND_COLOR = '#222222';
+
+        const sampleRate = 44100;
+        let totalDuration;
+        const baseFrequency = 100;
+        const maxFrequency = 10000;
+
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        function hexToRgb(hex) {
+            if (!hex) return null;
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        }
+        
+        function rgbToHex(r, g, b) {
+            return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+        }
+
+        function updateCanvasDimensions() {
+            const containerWidth = canvasContainer.offsetWidth;
+            const containerHeight = canvasContainer.offsetHeight;
+
+            drawingCanvas.width = containerWidth;
+            drawingCanvas.height = containerHeight;
+            cursorCanvas.width = containerWidth;
+            cursorCanvas.height = containerHeight;
+        }
+
+        function drawGrid() {
+            const cellWidth = drawingCanvas.width / GRID_WIDTH;
+            const cellHeight = drawingCanvas.height / GRID_HEIGHT;
+
+            drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+
+            if (gridState.length === 0) return;
+
+            for (let x = 0; x < GRID_WIDTH; x++) {
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    drawingCtx.fillStyle = gridState[x][y];
+                    drawingCtx.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+                    drawingCtx.strokeStyle = '#1a1a2e';
+                    drawingCtx.lineWidth = 1;
+                    drawingCtx.strokeRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+                }
+            }
+        }
+
+        function generateAudio() {
+            if (gridState.length === 0) {
+                loadingMessage.textContent = "Please upload an image or draw on the canvas.";
+                loadingMessage.classList.remove('hidden');
+                setTimeout(() => loadingMessage.classList.add('hidden'), 3000);
+                return;
+            }
+
+            loadingMessage.textContent = "Generating sound...";
+            loadingMessage.classList.remove('hidden');
+            stopAudio();
+
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sampleRate });
+            }
+
+            const numSamples = sampleRate * totalDuration;
+            const audioData = new Float32Array(numSamples);
+
+            for (let i = 0; i < numSamples; i++) {
+                let sample = 0;
+                let totalAmplitude = 0;
+                const timeFraction = i / numSamples;
+                const gridX = Math.floor(timeFraction * GRID_WIDTH);
+                
+                if (gridX >= GRID_WIDTH) continue;
+
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    const color = gridState[gridX][y];
+                    if (color && color !== BACKGROUND_COLOR) {
+                        const rgb = hexToRgb(color);
+                        if (rgb) {
+                            const amplitude = (rgb.r + rgb.g + rgb.b) / (255 * 3);
+                            const normalizedY = 1 - (y / GRID_HEIGHT);
+                            const frequency = baseFrequency + (normalizedY * (maxFrequency - baseFrequency));
+                            
+                            sample += amplitude * Math.sin(2 * Math.PI * frequency * timeFraction * totalDuration);
+                            totalAmplitude += amplitude;
+                        }
+                    }
+                }
+                
+                if (totalAmplitude > 0) {
+                    audioData[i] = sample / totalAmplitude;
+                } else {
+                    audioData[i] = 0;
+                }
+            }
+
+            audioBuffer = audioContext.createBuffer(1, numSamples, sampleRate);
+            audioBuffer.copyToChannel(audioData, 0);
+
+            loadingMessage.classList.add('hidden');
+        }
+
+        function playAudio() {
+            if (audioBuffer && !isPlaying) {
+                stopAudio();
+                audioBufferSource = audioContext.createBufferSource();
+                audioBufferSource.buffer = audioBuffer;
+                audioBufferSource.loop = false;
+                audioBufferSource.connect(audioContext.destination);
+                audioBufferSource.start();
+
+                isPlaying = true;
+                playPauseBtn.textContent = '⏸️ Pause';
+                requestAnimationFrame(updatePlayback);
+            }
+        }
+
+        function stopAudio() {
+            if (audioBufferSource) {
+                audioBufferSource.stop();
+                audioBufferSource.disconnect();
+                audioBufferSource = null;
+            }
+            isPlaying = false;
+            playPauseBtn.textContent = '▶️ Play';
+            drawCursor(0);
+        }
+
+        function updatePlayback() {
+            if (!isPlaying) return;
+            const currentTime = (audioContext.currentTime % totalDuration);
+            const progress = currentTime / totalDuration;
+            drawCursor(progress);
+            if (isPlaying) {
+                requestAnimationFrame(updatePlayback);
+            }
+        }
+
+        function drawCursor(progress) {
+            cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+            const cursorX = progress * cursorCanvas.width;
+            cursorCtx.beginPath();
+            cursorCtx.moveTo(cursorX, 0);
+            cursorCtx.lineTo(cursorX, cursorCanvas.height);
+            cursorCtx.strokeStyle = '#d4d4d4';
+            cursorCtx.lineWidth = 2;
+            cursorCtx.stroke();
+        }
+        
+        function downloadWavFile() {
+            if (!audioBuffer) {
+                loadingMessage.textContent = "Please upload an image and generate audio first!";
+                loadingMessage.classList.remove('hidden');
+                setTimeout(() => loadingMessage.classList.add('hidden'), 3000);
+                return;
+            }
+
+            const numChannels = audioBuffer.numberOfChannels;
+            const sampleRate = audioBuffer.sampleRate;
+            const numSamples = audioBuffer.length;
+            const bitDepth = 16;
+            const byteRate = numChannels * sampleRate * (bitDepth / 8);
+            const blockAlign = numChannels * (bitDepth / 8);
+
+            const buffer = new ArrayBuffer(44 + numSamples * numChannels * (bitDepth / 8));
+            const view = new DataView(buffer);
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + numSamples * numChannels * (bitDepth / 8), true);
+            writeString(view, 8, 'WAVE');
+
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true); // PCM
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, bitDepth, true);
+
+            writeString(view, 36, 'data');
+            view.setUint32(40, numSamples * numChannels * (bitDepth / 8), true);
+
+            let offset = 44;
+            const audioData = audioBuffer.getChannelData(0);
+            for (let i = 0; i < numSamples; i++, offset += 2) {
+                const s = Math.max(-1, Math.min(1, audioData[i]));
+                view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+
+            const blob = new Blob([view], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'synthesizer-sound.wav';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+        function updateGridFromCanvas() {
+            loadingMessage.textContent = "Processing canvas...";
+            loadingMessage.classList.remove('hidden');
+
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+
+            tempCanvas.width = GRID_WIDTH;
+            tempCanvas.height = GRID_HEIGHT;
+            tempCtx.drawImage(drawingCanvas, 0, 0, GRID_WIDTH, GRID_HEIGHT);
+
+            const imageData = tempCtx.getImageData(0, 0, GRID_WIDTH, GRID_HEIGHT).data;
+            gridState = new Array(GRID_WIDTH).fill(0).map(() => new Array(GRID_HEIGHT).fill(null));
+
+            for (let x = 0; x < GRID_WIDTH; x++) {
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    const index = (y * GRID_WIDTH + x) * 4;
+                    const r = imageData[index];
+                    const g = imageData[index + 1];
+                    const b = imageData[index + 2];
+                    gridState[x][y] = rgbToHex(r, g, b);
+                }
+            }
+            
+            drawGrid();
+            generateAudio();
+        }
+
+        function pixelateImage(img) {
+            drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            canvasContainer.style.aspectRatio = `${img.width} / ${img.height}`;
+            drawingCanvas.width = canvasContainer.offsetWidth;
+            drawingCanvas.height = canvasContainer.offsetHeight;
+            drawingCtx.drawImage(img, 0, 0, drawingCanvas.width, drawingCanvas.height);
+            
+            GRID_WIDTH = parseInt(hSlider.value);
+            GRID_HEIGHT = Math.round(GRID_WIDTH / (img.width / img.height));
+            totalDuration = GRID_WIDTH;
+            updateGridFromCanvas();
+        }
+
+        function resetApp() {
+            stopAudio();
+            imageUpload.value = null;
+            canvasContainer.style.aspectRatio = '16 / 9';
+            updateCanvasDimensions();
+            drawingCtx.fillStyle = BACKGROUND_COLOR;
+            drawingCtx.fillRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            
+            GRID_WIDTH = parseInt(hSlider.value);
+            GRID_HEIGHT = Math.round(GRID_WIDTH / (16/9));
+            totalDuration = GRID_WIDTH;
+            updateGridFromCanvas();
+        }
+
+        // Drawing Functionality
+        function draw(e) {
+            if (!isDrawing) return;
+            const rect = drawingCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            drawingCtx.lineCap = 'round';
+            drawingCtx.lineJoin = 'round';
+            drawingCtx.strokeStyle = colorPicker.value;
+            drawingCtx.lineWidth = brushSizeSlider.value;
+
+            drawingCtx.beginPath();
+            drawingCtx.moveTo(lastX, lastY);
+            drawingCtx.lineTo(x, y);
+            drawingCtx.stroke();
+
+            lastX = x;
+            lastY = y;
+        }
+
+        drawingCanvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            const rect = drawingCanvas.getBoundingClientRect();
+            [lastX, lastY] = [e.clientX - rect.left, e.clientY - rect.top];
+        });
+        drawingCanvas.addEventListener('mousemove', draw);
+        drawingCanvas.addEventListener('mouseup', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                updateGridFromCanvas();
+            }
+        });
+        drawingCanvas.addEventListener('mouseout', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                updateGridFromCanvas();
+            }
+        });
+
+        // Event Listeners
+        imageUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        pixelateImage(img);
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        playPauseBtn.addEventListener('click', () => {
+            if (isPlaying) {
+                stopAudio();
+            } else {
+                playAudio();
+            }
+        });
+
+        downloadBtn.addEventListener('click', downloadWavFile);
+
+        clearBtn.addEventListener('click', resetApp);
+
+        hSlider.addEventListener('input', () => {
+            hValue.textContent = hSlider.value;
+            // The logic to update the canvas is now in a single function
+            updateGridFromCanvas();
+        });
+
+        window.addEventListener('resize', () => {
+            updateCanvasDimensions();
+            updateGridFromCanvas();
+        });
+
+        window.onload = resetApp;
+    </script>
+</body>
+</html>
