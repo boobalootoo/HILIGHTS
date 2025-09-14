@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Grid Synthesizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            background-color: #16213e;
+            padding: 2.5rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.4);
+            text-align: center;
+            width: 100%;
+            max-width: 900px;
+        }
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            border: 2px solid #5a5a72;
+            border-radius: 1rem;
+            background-color: #0f182c;
+            overflow: hidden;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #drawingCanvas {
+            z-index: 1;
+        }
+        #cursorCanvas {
+            z-index: 2;
+            pointer-events: none;
+        }
+        .btn {
+            background-color: #8e44ad;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.3s;
+        }
+        .btn:hover {
+            background-color: #9b59b6;
+            transform: translateY(-2px);
+        }
+        #loadingMessage {
+            color: #9CA3AF;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .slider-container {
+            margin: 1.5rem 0;
+            text-align: left;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #2d2d4d;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+            border-radius: 4px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #8e44ad;
+            cursor: pointer;
+            border-radius: 50%;
+            transition: background 0.3s, transform 0.3s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: #9b59b6;
+            transform: scale(1.1);
+        }
+        .color-palette {
+            display: flex;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+        .color-swatch {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        .color-swatch:hover {
+            transform: scale(1.1);
+        }
+        .color-swatch.active {
+            border-color: #e0e0e0;
+            transform: scale(1.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-4xl font-bold mb-4 text-white">Interactive Grid Synthesizer</h1>
+        <p class="text-gray-400 mb-6 max-w-md mx-auto">
+            Click and drag on the grid to create sound. Horizontal squares represent time (1 second each), and vertical squares represent frequency.
+        </p>
+        
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>Horizontal Squares (Time)</span>
+                <span id="h-value">32</span>
+            </div>
+            <input type="range" id="h-slider" min="1" max="64" value="32">
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>Vertical Squares (Frequency)</span>
+                <span id="v-value">16</span>
+            </div>
+            <input type="range" id="v-slider" min="1" max="64" value="16">
+        </div>
+
+        <div class="canvas-container mt-6">
+            <canvas id="drawingCanvas"></canvas>
+            <canvas id="cursorCanvas"></canvas>
+        </div>
+
+        <div class="color-palette">
+            <div class="color-swatch active" style="background-color: #3498db;" data-color="#3498db"></div>
+            <div class="color-swatch" style="background-color: #2ecc71;" data-color="#2ecc71"></div>
+            <div class="color-swatch" style="background-color: #f1c40f;" data-color="#f1c40f"></div>
+            <div class="color-swatch" style="background-color: #e74c3c;" data-color="#e74c3c"></div>
+            <div class="color-swatch" style="background-color: #9b59b6;" data-color="#9b59b6"></div>
+        </div>
+
+        <div class="mt-8 flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 justify-center items-center">
+            <button id="playPauseBtn" class="btn">▶️ Play</button>
+            <button id="clearBtn" class="btn bg-gray-600 hover:bg-gray-700">Clear</button>
+        </div>
+        <p id="loadingMessage" class="hidden text-center text-sm mt-4"></p>
+    </div>
+
+    <script>
+        const hSlider = document.getElementById('h-slider');
+        const vSlider = document.getElementById('v-slider');
+        const hValue = document.getElementById('h-value');
+        const vValue = document.getElementById('v-value');
+
+        const drawingCanvas = document.getElementById('drawingCanvas');
+        const drawingCtx = drawingCanvas.getContext('2d');
+        const cursorCanvas = document.getElementById('cursorCanvas');
+        const cursorCtx = cursorCanvas.getContext('2d');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const loadingMessage = document.getElementById('loadingMessage');
+        const canvasContainer = document.querySelector('.canvas-container');
+        const colorPalette = document.querySelector('.color-palette');
+
+        let GRID_WIDTH;
+        let GRID_HEIGHT;
+
+        let gridState = [];
+        let audioContext;
+        let audioBuffer;
+        let audioBufferSource;
+        let isPlaying = false;
+        let isDrawing = false;
+        let lastGridX = -1;
+        let lastGridY = -1;
+        let selectedColor = '#3498db';
+        
+        const BACKGROUND_COLOR = '#0f182c';
+
+        const sampleRate = 44100;
+        let totalDuration;
+        const baseFrequency = 100;
+        const maxFrequency = 10000;
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        }
+
+        function updateGridSize() {
+            GRID_WIDTH = parseInt(hSlider.value);
+            GRID_HEIGHT = parseInt(vSlider.value);
+            totalDuration = GRID_WIDTH;
+
+            hValue.textContent = GRID_WIDTH;
+            vValue.textContent = GRID_HEIGHT;
+
+            const cellWidth = canvasContainer.offsetWidth / GRID_WIDTH;
+            const canvasHeight = cellWidth * GRID_HEIGHT;
+
+            drawingCanvas.width = canvasContainer.offsetWidth;
+            drawingCanvas.height = canvasHeight;
+            cursorCanvas.width = canvasContainer.offsetWidth;
+            cursorCanvas.height = canvasHeight;
+            canvasContainer.style.height = `${canvasHeight}px`;
+
+            gridState = Array(GRID_WIDTH).fill(null).map(() => Array(GRID_HEIGHT).fill(BACKGROUND_COLOR));
+            drawGrid();
+            generateAudio();
+        }
+
+        function drawGrid() {
+            const cellWidth = drawingCanvas.width / GRID_WIDTH;
+            const cellHeight = drawingCanvas.height / GRID_HEIGHT;
+
+            for (let x = 0; x < GRID_WIDTH; x++) {
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    drawingCtx.fillStyle = gridState[x][y];
+                    drawingCtx.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+                    drawingCtx.strokeStyle = '#1a1a2e';
+                    drawingCtx.lineWidth = 1;
+                    drawingCtx.strokeRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+                }
+            }
+        }
+
+        function generateAudio() {
+            loadingMessage.textContent = "Generating sound...";
+            loadingMessage.classList.remove('hidden');
+            stopAudio();
+
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sampleRate });
+            }
+
+            const numSamples = sampleRate * totalDuration;
+            const audioData = new Float32Array(numSamples);
+
+            for (let i = 0; i < numSamples; i++) {
+                let sample = 0;
+                let totalAmplitude = 0;
+                const timeFraction = i / numSamples;
+                const gridX = Math.floor(timeFraction * GRID_WIDTH);
+
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    const color = gridState[gridX][y];
+                    if (color !== BACKGROUND_COLOR) {
+                        const rgb = hexToRgb(color);
+                        const amplitude = (rgb.r + rgb.g + rgb.b) / (255 * 3);
+                        const normalizedY = 1 - (y / GRID_HEIGHT);
+                        const frequency = baseFrequency + (normalizedY * (maxFrequency - baseFrequency));
+                        
+                        sample += amplitude * Math.sin(2 * Math.PI * frequency * timeFraction * totalDuration);
+                        totalAmplitude += amplitude;
+                    }
+                }
+                
+                if (totalAmplitude > 0) {
+                    audioData[i] = sample / totalAmplitude;
+                } else {
+                    audioData[i] = 0;
+                }
+            }
+
+            audioBuffer = audioContext.createBuffer(1, numSamples, sampleRate);
+            audioBuffer.copyToChannel(audioData, 0);
+
+            loadingMessage.classList.add('hidden');
+        }
+
+        function playAudio() {
+            if (audioBuffer && !isPlaying) {
+                stopAudio();
+                audioBufferSource = audioContext.createBufferSource();
+                audioBufferSource.buffer = audioBuffer;
+                audioBufferSource.loop = false;
+                audioBufferSource.connect(audioContext.destination);
+                audioBufferSource.start();
+
+                isPlaying = true;
+                playPauseBtn.textContent = '⏸️ Pause';
+                requestAnimationFrame(updatePlayback);
+            }
+        }
+
+        function stopAudio() {
+            if (audioBufferSource) {
+                audioBufferSource.stop();
+                audioBufferSource.disconnect();
+                audioBufferSource = null;
+            }
+            isPlaying = false;
+            playPauseBtn.textContent = '▶️ Play';
+            drawCursor(0);
+        }
+
+        function updatePlayback() {
+            if (!isPlaying) return;
+            const currentTime = (audioContext.currentTime % totalDuration);
+            const progress = currentTime / totalDuration;
+            drawCursor(progress);
+            if (isPlaying) {
+                requestAnimationFrame(updatePlayback);
+            }
+        }
+
+        function drawCursor(progress) {
+            cursorCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+            const cursorX = progress * cursorCanvas.width;
+            cursorCtx.beginPath();
+            cursorCtx.moveTo(cursorX, 0);
+            cursorCtx.lineTo(cursorX, cursorCanvas.height);
+            cursorCtx.strokeStyle = '#d4d4d4';
+            cursorCtx.lineWidth = 2;
+            cursorCtx.stroke();
+        }
+        
+        function handleInteraction(e) {
+            if (e.buttons !== 1) {
+                return;
+            }
+
+            const rect = drawingCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const cellWidth = drawingCanvas.width / GRID_WIDTH;
+            const cellHeight = drawingCanvas.height / GRID_HEIGHT;
+            const gridX = Math.floor(x / cellWidth);
+            const gridY = Math.floor(y / cellHeight);
+
+            if (gridX >= 0 && gridX < GRID_WIDTH && gridY >= 0 && gridY < GRID_HEIGHT) {
+                if (gridX !== lastGridX || gridY !== lastGridY) {
+                    gridState[gridX][gridY] = selectedColor;
+                    drawGrid();
+                    lastGridX = gridX;
+                    lastGridY = gridY;
+                }
+            }
+        }
+
+        drawingCanvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            lastGridX = -1;
+            lastGridY = -1;
+            handleInteraction(e);
+        });
+
+        drawingCanvas.addEventListener('mousemove', (e) => {
+            if (isDrawing) {
+                handleInteraction(e);
+            }
+        });
+        
+        drawingCanvas.addEventListener('mouseup', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                generateAudio();
+            }
+        });
+
+        drawingCanvas.addEventListener('mouseleave', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                generateAudio();
+            }
+        });
+
+        colorPalette.addEventListener('click', (e) => {
+            const target = e.target.closest('.color-swatch');
+            if (target) {
+                // Remove active class from all swatches
+                document.querySelectorAll('.color-swatch').forEach(swatch => {
+                    swatch.classList.remove('active');
+                });
+                // Add active class to the clicked swatch
+                target.classList.add('active');
+                selectedColor = target.dataset.color;
+            }
+        });
+
+        playPauseBtn.addEventListener('click', () => {
+            if (isPlaying) {
+                stopAudio();
+            } else {
+                playAudio();
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            stopAudio();
+            updateGridSize();
+        });
+
+        hSlider.addEventListener('input', updateGridSize);
+        vSlider.addEventListener('input', updateGridSize);
+
+        window.addEventListener('resize', updateGridSize);
+
+        window.onload = updateGridSize;
+    </script>
+</body>
+</html>
