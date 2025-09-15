@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voxel Builder</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+        :root {
+            --bg-color: #1a1a2e;
+            --main-color: #0f3460;
+            --accent-color: #e94560;
+            --text-color: #f4f4f4;
+            --secondary-text-color: #a4a4a4;
+            --control-color: #2e3e5e;
+            --border-color: #4a5d7c;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        #scene-container {
+            flex-grow: 1;
+            background-color: var(--main-color);
+            cursor: pointer;
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 16px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            position: relative;
+        }
+        
+        #scene-container canvas {
+            display: block;
+            touch-action: none;
+        }
+
+        .controls {
+            position: absolute;
+            top: 24px;
+            left: 24px;
+            background: var(--control-color);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 10;
+        }
+
+        h1 {
+            font-weight: 600;
+            font-size: 1.5rem;
+            margin: 0 0 8px 0;
+            color: var(--accent-color);
+        }
+
+        h2 {
+            font-size: 1rem;
+            font-weight: 400;
+            margin: 0;
+            color: var(--secondary-text-color);
+        }
+
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .control-group label {
+            min-width: 80px;
+        }
+
+        input[type="color"] {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            padding: 0;
+        }
+
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        input[type="color"]::-webkit-color-swatch {
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+        }
+
+        input[type="color"]::-moz-color-swatch {
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+        }
+        
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        button, input[type="file"] {
+            background-color: var(--accent-color);
+            color: var(--text-color);
+            border: none;
+            padding: 12px 20px;
+            font-size: 0.9rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            font-weight: 600;
+        }
+
+        button:hover {
+            background-color: #c4324f;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        input[type="file"] {
+            display: none; /* Hide the default file input */
+        }
+        
+        .file-upload-label {
+            background-color: var(--accent-color);
+            color: var(--text-color);
+            padding: 12px 20px;
+            font-size: 0.9rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            font-weight: 600;
+            display: inline-block;
+        }
+        
+        .file-upload-label:hover {
+            background-color: #c4324f;
+        }
+        
+        .file-upload-label:active {
+            transform: scale(0.98);
+        }
+
+        #message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: var(--control-color);
+            color: var(--text-color);
+            padding: 20px 30px;
+            border-radius: 12px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            text-align: center;
+            display: none;
+            font-size: 1rem;
+            max-width: 300px;
+        }
+        
+        #message-box p {
+            margin: 0 0 15px 0;
+        }
+        
+        #message-box button {
+            background-color: var(--accent-color);
+            color: var(--text-color);
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .spinner {
+            border: 4px solid var(--border-color);
+            border-radius: 50%;
+            border-top: 4px solid var(--accent-color);
+            width: 30px;
+            height: 30px;
+            -webkit-animation: spin 1s linear infinite;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .controls {
+                top: auto;
+                bottom: 16px;
+                left: 16px;
+                right: 16px;
+                flex-direction: column;
+                padding: 16px;
+            }
+            
+            .button-group {
+                justify-content: center;
+            }
+
+            h1, h2 {
+                text-align: center;
+            }
+            
+            #scene-container {
+                margin: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div class="controls">
+            <h1>Voxel Builder</h1>
+            <h2>Create and download your 3D models.</h2>
+            <div class="control-group">
+                <label for="colorPicker">Current Color:</label>
+                <input type="color" id="colorPicker" value="#00aaff">
+            </div>
+            <div class="button-group">
+                <button id="mode-button" data-mode="add">Mode: Add Voxel</button>
+                <button id="download-button">Download GLB</button>
+                <input type="file" id="image-input" accept="image/*">
+                <label for="image-input" class="file-upload-label">Trace from Image</label>
+            </div>
+        </div>
+        <div id="scene-container"></div>
+    </div>
+    <div id="message-box">
+        <div id="message-content"></div>
+    </div>
+
+    <!-- three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls for easy camera movement -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- GLTF Exporter for GLB download -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+
+    <script>
+        // --- Globals ---
+        let scene, camera, renderer, controls;
+        let raycaster;
+        let pointer = new THREE.Vector2();
+        let currentMode = 'add';
+        const voxelSize = 1;
+        const voxelGeo = new THREE.BoxGeometry(voxelSize, voxelSize, voxelSize);
+        const voxels = new Map(); // Stores voxels using a string key like "x,y,z"
+        let currentMaterial = new THREE.MeshLambertMaterial({ color: 0x00aaff });
+        let tempMesh = null;
+        let isShiftDown = false;
+        
+        // --- UI Elements ---
+        const container = document.getElementById('scene-container');
+        const modeButton = document.getElementById('mode-button');
+        const colorPicker = document.getElementById('colorPicker');
+        const downloadButton = document.getElementById('download-button');
+        const imageInput = document.getElementById('image-input');
+        const messageBox = document.getElementById('message-box');
+        const messageContent = document.getElementById('message-content');
+
+        // --- Core Functions ---
+        function showMessage(message, duration = 3000) {
+            messageContent.innerHTML = message;
+            messageBox.style.display = 'block';
+            if (duration) {
+                setTimeout(() => {
+                    messageBox.style.display = 'none';
+                }, duration);
+            }
+        }
+        
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f3460); // Replaced var(--main-color)
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(10, 10, 10);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.offsetWidth, container.offsetHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.mouseButtons = {
+                RIGHT: THREE.MOUSE.ROTATE,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                LEFT: THREE.MOUSE.PAN // Using left mouse for pan
+            };
+            controls.listenToKeyEvents(window);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(50, 50, 50);
+            scene.add(directionalLight);
+
+            // Grid Helper for visual aid
+            const gridHelper = new THREE.GridHelper(50, 50, 0x5a6a8c, 0x5a6a8c);
+            scene.add(gridHelper);
+
+            // Raycaster for mouse interaction
+            raycaster = new THREE.Raycaster();
+
+            // Set initial material color
+            colorPicker.value = '#' + currentMaterial.color.getHexString();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = container.offsetWidth / container.offsetHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.offsetWidth, container.offsetHeight);
+        }
+
+        function createVoxel(x, y, z, color) {
+            const material = new THREE.MeshLambertMaterial({ color: new THREE.Color(color) });
+            const voxel = new THREE.Mesh(voxelGeo, material);
+            voxel.position.set(x, y, z);
+            return voxel;
+        }
+        
+        function getVoxelKey(x, y, z) {
+            return `${x},${y},${z}`;
+        }
+        
+        function addVoxel(x, y, z, color) {
+            const key = getVoxelKey(x, y, z);
+            if (!voxels.has(key)) {
+                const newVoxel = createVoxel(x, y, z, color);
+                scene.add(newVoxel);
+                voxels.set(key, newVoxel);
+            }
+        }
+        
+        function removeVoxel(x, y, z) {
+            const key = getVoxelKey(x, y, z);
+            const voxel = voxels.get(key);
+            if (voxel) {
+                scene.remove(voxel);
+                voxels.delete(key);
+                voxel.geometry.dispose();
+                voxel.material.dispose();
+            }
+        }
+        
+        function clearScene() {
+            voxels.forEach(voxel => {
+                scene.remove(voxel);
+                voxel.geometry.dispose();
+                voxel.material.dispose();
+            });
+            voxels.clear();
+        }
+
+        // --- Event Listeners ---
+        function onPointerMove(event) {
+            const rect = container.getBoundingClientRect();
+            pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            
+            // Highlight a voxel face based on mouse position
+            if (tempMesh) {
+                scene.remove(tempMesh);
+                tempMesh = null;
+            }
+            
+            if (currentMode === 'add') {
+                raycaster.setFromCamera(pointer, camera);
+                const intersects = raycaster.intersectObjects(Array.from(voxels.values()));
+                
+                if (intersects.length > 0) {
+                    const intersect = intersects[0];
+                    const normalMatrix = new THREE.Matrix3().getNormalMatrix(intersect.object.matrixWorld);
+                    const worldNormal = intersect.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+                    
+                    const position = intersect.object.position.clone().add(worldNormal);
+                    
+                    tempMesh = createVoxel(position.x, position.y, position.z, colorPicker.value);
+                    tempMesh.material.opacity = 0.5;
+                    tempMesh.material.transparent = true;
+                    scene.add(tempMesh);
+                }
+            }
+        }
+        
+        function onPointerClick(event) {
+            // Only use left mouse button click
+            if (event.button !== 0) return;
+
+            // Pan control is active with left mouse
+            // The logic was causing issue. Removed the return statement.
+            // if (controls.mouseButtons.LEFT === THREE.MOUSE.PAN) {
+            //     return;
+            // }
+
+            raycaster.setFromCamera(pointer, camera);
+            const intersects = raycaster.intersectObjects(Array.from(voxels.values()));
+
+            if (currentMode === 'remove') {
+                if (intersects.length > 0) {
+                    const intersect = intersects[0];
+                    removeVoxel(intersect.object.position.x, intersect.object.position.y, intersect.object.position.z);
+                }
+            } else { // 'add' mode
+                if (intersects.length > 0) {
+                    const intersect = intersects[0];
+                    const normalMatrix = new THREE.Matrix3().getNormalMatrix(intersect.object.matrixWorld);
+                    const worldNormal = intersect.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+                    
+                    const position = intersect.object.position.clone().add(worldNormal);
+                    
+                    addVoxel(position.x, position.y, position.z, colorPicker.value);
+                } else {
+                     // If no voxel is clicked, add a new one at the origin
+                     addVoxel(0, 0, 0, colorPicker.value);
+                }
+            }
+        }
+        
+        modeButton.addEventListener('click', () => {
+            currentMode = currentMode === 'add' ? 'remove' : 'add';
+            modeButton.textContent = `Mode: ${currentMode === 'add' ? 'Add Voxel' : 'Remove Voxel'}`;
+            // Change OrbitControls mouse button for easy use
+            if (currentMode === 'add') {
+                controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+                renderer.domElement.addEventListener('pointermove', onPointerMove, false);
+                renderer.domElement.addEventListener('pointerdown', onPointerClick, false);
+            } else {
+                controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE; // Change to rotate when in remove mode
+                renderer.domElement.removeEventListener('pointermove', onPointerMove, false);
+                if (tempMesh) {
+                    scene.remove(tempMesh);
+                    tempMesh = null;
+                }
+                renderer.domElement.addEventListener('pointerdown', onPointerClick, false);
+            }
+        });
+
+        colorPicker.addEventListener('change', (event) => {
+            currentMaterial.color.set(event.target.value);
+        });
+        
+        downloadButton.addEventListener('click', () => {
+            if (voxels.size === 0) {
+                showMessage("No voxels to export!", 2000);
+                return;
+            }
+            showMessage("Exporting GLB file...", null);
+            
+            const exporter = new THREE.GLTFExporter();
+            const group = new THREE.Group();
+            voxels.forEach(voxel => {
+                group.add(voxel.clone());
+            });
+
+            exporter.parse(group, function (result) {
+                const blob = new Blob([result], { type: 'model/gltf-binary' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'voxel-model.glb';
+                link.click();
+                URL.revokeObjectURL(url);
+                messageBox.style.display = 'none';
+            }, { binary: true });
+        });
+        
+        imageInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    showMessage("Tracing image...", null);
+                    clearScene();
+                    
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0, img.width, img.height);
+                    
+                    const imageData = ctx.getImageData(0, 0, img.width, img.height);
+                    const data = imageData.data;
+                    
+                    const maxDim = Math.max(img.width, img.height);
+                    const scale = 20 / maxDim; // Scale the model to fit scene
+                    
+                    for (let x = 0; x < img.width; x++) {
+                        for (let y = 0; y < img.height; y++) {
+                            const index = (y * img.width + x) * 4;
+                            const r = data[index];
+                            const g = data[index + 1];
+                            const b = data[index + 2];
+                            const a = data[index + 3];
+                            
+                            if (a > 0) { // Only add voxels for non-transparent pixels
+                                const color = new THREE.Color(`rgb(${r},${g},${b})`);
+                                addVoxel((x - img.width/2) * scale, 0, (y - img.height/2) * scale, color);
+                            }
+                        }
+                    }
+                    showMessage("Image traced successfully!", 2000);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // --- Main Execution ---
+        init();
+        animate();
+        window.addEventListener('resize', onWindowResize);
+        
+        // Initial setup for add mode
+        modeButton.click();
+    </script>
+</body>
+</html>
