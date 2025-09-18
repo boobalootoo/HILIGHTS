@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Image Body Part Cutter</title>
+  <style>
+    body { margin:0; display:flex; flex-direction:column; align-items:center; }
+    canvas { border:1px solid black; cursor:crosshair; }
+    #controls { margin:10px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input type="file" id="imageLoader" accept="image/*">
+    <button id="toggleMode">Switch to Body Part Mode</button>
+    <button id="exportParts">Export Body Parts</button>
+  </div>
+  <canvas id="canvas" width="1200" height="1200"></canvas>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const imageLoader = document.getElementById("imageLoader");
+    const toggleModeBtn = document.getElementById("toggleMode");
+    const exportBtn = document.getElementById("exportParts");
+
+    let img = null;
+    let mode = "cut"; // "cut" or "body"
+
+    // Body parts
+    const bodyParts = [
+      { label: "Head", type: "ellipse", x: 500, y: 50, width: 120, height: 150 },
+      { label: "Neck", type: "rect", x: 540, y: 210, width: 60, height: 40 },
+      { label: "Torso", type: "ellipse", x: 450, y: 250, width: 200, height: 250 },
+      { label: "UpperArmLeft", type: "rect", x: 380, y: 270, width: 60, height: 130 },
+      { label: "LowerArmLeft", type: "rect", x: 380, y: 410, width: 60, height: 130 },
+      { label: "HandLeft", type: "rect", x: 380, y: 550, width: 60, height: 60 },
+      { label: "UpperArmRight", type: "rect", x: 660, y: 270, width: 60, height: 130 },
+      { label: "LowerArmRight", type: "rect", x: 660, y: 410, width: 60, height: 130 },
+      { label: "HandRight", type: "rect", x: 660, y: 550, width: 60, height: 60 },
+      { label: "UpperLegLeft", type: "rect", x: 500, y: 510, width: 70, height: 150 },
+      { label: "LowerLegLeft", type: "rect", x: 500, y: 670, width: 70, height: 150 },
+      { label: "FootLeft", type: "rect", x: 500, y: 830, width: 70, height: 40 },
+      { label: "UpperLegRight", type: "rect", x: 580, y: 510, width: 70, height: 150 },
+      { label: "LowerLegRight", type: "rect", x: 580, y: 670, width: 70, height: 150 },
+      { label: "FootRight", type: "rect", x: 580, y: 830, width: 70, height: 40 }
+    ];
+
+    let selectedPart = null;
+    let selectedHandle = null;
+    let offsetX, offsetY;
+
+    const HANDLE_SIZE = 8;
+
+    imageLoader.addEventListener("change", handleImage, false);
+    toggleModeBtn.addEventListener("click", () => {
+      mode = mode === "cut" ? "body" : "cut";
+      toggleModeBtn.textContent = mode === "cut" ? "Switch to Body Part Mode" : "Switch to Cut Mode";
+      redraw();
+    });
+    exportBtn.addEventListener("click", exportBodyParts);
+
+    function handleImage(e) {
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        img = new Image();
+        img.onload = function() {
+          redraw();
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    }
+
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (img) ctx.drawImage(img, 0, 0);
+
+      if (mode === "body") {
+        bodyParts.forEach(part => {
+          ctx.save();
+          ctx.beginPath();
+          if (part.type === "ellipse") {
+            ctx.ellipse(
+              part.x + part.width / 2,
+              part.y + part.height / 2,
+              part.width / 2,
+              part.height / 2,
+              0, 0, Math.PI * 2
+            );
+          } else {
+            ctx.rect(part.x, part.y, part.width, part.height);
+          }
+          ctx.strokeStyle = "red";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          // label
+          ctx.fillStyle = "black";
+          ctx.font = "16px Arial";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(part.label, part.x + part.width/2, part.y + part.height/2);
+
+          ctx.restore();
+
+          // draw resize handles
+          drawHandles(part);
+        });
+      }
+    }
+
+    function drawHandles(part) {
+      const handles = getHandles(part);
+      ctx.fillStyle = "blue";
+      handles.forEach(h => {
+        ctx.fillRect(h.x - HANDLE_SIZE/2, h.y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+      });
+    }
+
+    function getHandles(part) {
+      return [
+        {name:"tl", x: part.x, y: part.y},
+        {name:"tr", x: part.x+part.width, y: part.y},
+        {name:"bl", x: part.x, y: part.y+part.height},
+        {name:"br", x: part.x+part.width, y: part.y+part.height}
+      ];
+    }
+
+    function getHandleAt(x,y,part) {
+      return getHandles(part).find(h => 
+        x >= h.x - HANDLE_SIZE/2 && x <= h.x + HANDLE_SIZE/2 &&
+        y >= h.y - HANDLE_SIZE/2 && y <= h.y + HANDLE_SIZE/2
+      );
+    }
+
+    canvas.addEventListener("mousedown", (e) => {
+      if (mode !== "body") return;
+      const mouseX = e.offsetX, mouseY = e.offsetY;
+      for (const part of bodyParts) {
+        const handle = getHandleAt(mouseX, mouseY, part);
+        if (handle) {
+          selectedPart = part;
+          selectedHandle = handle.name;
+          return;
+        }
+      }
+      selectedPart = bodyParts.find(part => isInsidePart(mouseX, mouseY, part));
+      if (selectedPart) {
+        offsetX = mouseX - selectedPart.x;
+        offsetY = mouseY - selectedPart.y;
+      }
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+      if (mode !== "body" || !selectedPart) return;
+      const mouseX = e.offsetX, mouseY = e.offsetY;
+      if (selectedHandle) {
+        resizePart(selectedPart, selectedHandle, mouseX, mouseY);
+      } else {
+        selectedPart.x = mouseX - offsetX;
+        selectedPart.y = mouseY - offsetY;
+      }
+      redraw();
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      selectedPart = null;
+      selectedHandle = null;
+    });
+
+    function isInsidePart(x, y, part) {
+      if (part.type === "ellipse") {
+        const dx = x - (part.x + part.width / 2);
+        const dy = y - (part.y + part.height / 2);
+        return (dx*dx)/(part.width/2*part.width/2) + (dy*dy)/(part.height/2*part.height/2) <= 1;
+      } else {
+        return x >= part.x && x <= part.x + part.width && y >= part.y && y <= part.y + part.height;
+      }
+    }
+
+    function resizePart(part, handle, mouseX, mouseY) {
+      switch (handle) {
+        case "tl":
+          part.width += part.x - mouseX;
+          part.height += part.y - mouseY;
+          part.x = mouseX;
+          part.y = mouseY;
+          break;
+        case "tr":
+          part.width = mouseX - part.x;
+          part.height += part.y - mouseY;
+          part.y = mouseY;
+          break;
+        case "bl":
+          part.width += part.x - mouseX;
+          part.x = mouseX;
+          part.height = mouseY - part.y;
+          break;
+        case "br":
+          part.width = mouseX - part.x;
+          part.height = mouseY - part.y;
+          break;
+      }
+    }
+
+    function exportBodyParts() {
+      if (!img) {
+        alert("Please upload an image first.");
+        return;
+      }
+      bodyParts.forEach(part => {
+        const tempCanvas = document.createElement("canvas");
+        const tempCtx = tempCanvas.getContext("2d");
+        tempCanvas.width = part.width;
+        tempCanvas.height = part.height;
+        tempCtx.save();
+        tempCtx.beginPath();
+        if (part.type === "ellipse") {
+          tempCtx.ellipse(part.width/2, part.height/2, part.width/2, part.height/2, 0, 0, Math.PI*2);
+        } else {
+          tempCtx.rect(0,0,part.width,part.height);
+        }
+        tempCtx.clip();
+        tempCtx.drawImage(img, part.x, part.y, part.width, part.height, 0,0,part.width,part.height);
+        tempCtx.restore();
+        const link = document.createElement("a");
+        link.download = `${part.label}.png`;
+        link.href = tempCanvas.toDataURL("image/png");
+        link.click();
+      });
+    }
+  </script>
+</body>
+</html>
