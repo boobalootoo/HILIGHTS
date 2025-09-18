@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Click to Place Skeleton</title>
+  <style>
+    body { margin: 0; background: #222; color: #fff; font-family: sans-serif; text-align: center; }
+    #controls { padding: 10px; background: #333; }
+    #canvas-container { position: relative; display: inline-block; }
+    #uploadedImage { max-width: 90vw; max-height: 70vh; display: block; }
+    svg { position: absolute; top: 0; left: 0; }
+    circle { fill: red; cursor: pointer; }
+    circle.selected { fill: yellow; }
+    line { stroke: white; stroke-width: 2; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input type="file" id="imageUpload" accept="image/*">
+    <button id="toggleSkeletonBtn">Toggle Skeleton</button>
+  </div>
+
+  <div id="canvas-container">
+    <img id="uploadedImage">
+    <svg id="skeleton"></svg>
+  </div>
+
+  <script>
+    const img = document.getElementById("uploadedImage");
+    const svg = document.getElementById("skeleton");
+    let skeletonVisible = true;
+    let selectedJoint = null;
+
+    const jointNames = [
+      "head","neck","chest","waist",
+      "left_shoulder","right_shoulder","left_elbow","right_elbow",
+      "left_hand","right_hand","left_hip","right_hip",
+      "left_knee","right_knee","left_foot","right_foot"
+    ];
+
+    const bones = [
+      ["head","neck"],["neck","chest"],["chest","waist"],
+      ["neck","left_shoulder"],["neck","right_shoulder"],
+      ["left_shoulder","left_elbow"],["left_elbow","left_hand"],
+      ["right_shoulder","right_elbow"],["right_elbow","right_hand"],
+      ["waist","left_hip"],["waist","right_hip"],
+      ["left_hip","left_knee"],["left_knee","left_foot"],
+      ["right_hip","right_knee"],["right_knee","right_foot"]
+    ];
+
+    const joints = {};
+
+    function initSkeleton(width, height) {
+      svg.innerHTML = "";
+      svg.setAttribute("width", width);
+      svg.setAttribute("height", height);
+
+      // Create bone lines
+      bones.forEach(([a,b]) => {
+        const line = document.createElementNS("http://www.w3.org/2000/svg","line");
+        line.dataset.a = a; line.dataset.b = b;
+        svg.appendChild(line);
+      });
+
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const spacing = height / 12;
+
+      const defaults = {
+        head: [centerX, centerY - spacing*3],
+        neck: [centerX, centerY - spacing*2.2],
+        chest: [centerX, centerY - spacing*1.2],
+        waist: [centerX, centerY],
+        left_shoulder: [centerX - spacing, centerY - spacing*2.2],
+        right_shoulder:[centerX + spacing, centerY - spacing*2.2],
+        left_elbow:[centerX - spacing*1.5, centerY - spacing*0.8],
+        right_elbow:[centerX + spacing*1.5, centerY - spacing*0.8],
+        left_hand:[centerX - spacing*2, centerY + spacing*0.5],
+        right_hand:[centerX + spacing*2, centerY + spacing*0.5],
+        left_hip:[centerX - spacing*0.8, centerY + spacing*0.8],
+        right_hip:[centerX + spacing*0.8, centerY + spacing*0.8],
+        left_knee:[centerX - spacing*0.8, centerY + spacing*2],
+        right_knee:[centerX + spacing*0.8, centerY + spacing*2],
+        left_foot:[centerX - spacing*0.8, centerY + spacing*3.2],
+        right_foot:[centerX + spacing*0.8, centerY + spacing*3.2]
+      };
+
+      // Create joint circles
+      jointNames.forEach(j => {
+        const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
+        c.setAttribute("r",5);
+        c.setAttribute("cx", defaults[j][0]);
+        c.setAttribute("cy", defaults[j][1]);
+        c.dataset.name = j;
+        c.addEventListener("click", (e) => {
+          e.stopPropagation(); // prevent triggering background click
+          if (selectedJoint) {
+            selectedJoint.classList.remove("selected");
+          }
+          selectedJoint = c;
+          c.classList.add("selected");
+        });
+        svg.appendChild(c);
+        joints[j] = c;
+      });
+
+      updateSkeleton();
+    }
+
+    function updateSkeleton() {
+      bones.forEach(([a,b]) => {
+        const ja = joints[a], jb = joints[b];
+        const line = [...svg.querySelectorAll("line")].find(l => l.dataset.a === a && l.dataset.b === b);
+        if (line) {
+          line.setAttribute("x1", ja.getAttribute("cx"));
+          line.setAttribute("y1", ja.getAttribute("cy"));
+          line.setAttribute("x2", jb.getAttribute("cx"));
+          line.setAttribute("y2", jb.getAttribute("cy"));
+        }
+      });
+    }
+
+    // Click on empty space in SVG moves selected joint
+    svg.addEventListener("click", (e) => {
+      if (!selectedJoint) return;
+      const rect = svg.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      selectedJoint.setAttribute("cx", x);
+      selectedJoint.setAttribute("cy", y);
+      updateSkeleton();
+    });
+
+    document.getElementById("imageUpload").addEventListener("change", e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        initSkeleton(img.width, img.height);
+      };
+    });
+
+    document.getElementById("toggleSkeletonBtn").addEventListener("click", () => {
+      skeletonVisible = !skeletonVisible;
+      svg.style.display = skeletonVisible ? "block" : "none";
+    });
+  </script>
+</body>
+</html>
