@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Character skeleton overlay</title>
+  <style>
+    :root{--bg:#0b0b0b;--panel:#111;--accent:#7ad;--muted:#bbb}
+    html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Arial;background:linear-gradient(180deg,#071016, #071827);color:white}
+    .wrap{max-width:1100px;margin:20px auto;padding:18px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px}
+    header{display:flex;gap:12px;align-items:center}
+    h1{font-size:18px;margin:0}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .controls > *{background:var(--panel);padding:8px;border-radius:8px}
+    label{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+    #stage{position:relative;margin-top:14px;border-radius:8px;overflow:hidden;background:#222;display:flex;align-items:center;justify-content:center}
+    canvas#imgCanvas{display:block;max-width:100%;height:auto}
+    svg#skeleton{position:absolute;left:0;top:0;width:100%;height:100%;touch-action:none}
+    .joint{cursor:grab}
+    .joint:active{cursor:grabbing}
+    .btn{background:linear-gradient(180deg,#1b2933,#122027);border:1px solid rgba(255,255,255,0.03);padding:8px 10px;border-radius:8px;color:#dff;cursor:pointer}
+    .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+    .small{padding:6px 8px;font-size:13px}
+    input[type=range]{width:120px}
+    footer{margin-top:12px;color:var(--muted);font-size:13px}
+    @media (max-width:700px){.controls{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Character skeleton overlay</h1>
+      <div style="margin-left:auto;color:var(--muted);font-size:13px">Upload an image, then move skeleton joints to match the pose.</div>
+    </header>
+
+    <div class="controls">
+      <div>
+        <label class="small">Image file
+          <input id="file" type="file" accept="image/*" style="display:inline-block;margin-left:8px" />
+        </label>
+      </div>
+
+      <div>
+        <label class="small">Skeleton opacity
+          <input id="opacity" type="range" min="0" max="1" step="0.01" value="0.9" />
+        </label>
+      </div>
+
+      <div>
+        <label class="small">Joint size
+          <input id="jointSize" type="range" min="4" max="20" step="1" value="8" />
+        </label>
+      </div>
+
+      <div>
+        <button id="toggle" class="btn small">Hide skeleton</button>
+      </div>
+
+      <div>
+        <button id="reset" class="btn secondary small">Reset skeleton</button>
+      </div>
+
+      <div>
+        <button id="export" class="btn small">Export image + skeleton</button>
+      </div>
+
+    </div>
+
+    <div id="stage" style="height:640px;margin-top:12px">
+      <canvas id="imgCanvas"></canvas>
+      <svg id="skeleton" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+
+    <footer>
+      Tip: drag joints (or touch) to match skeleton to the character. Use Export to save a composite PNG.
+    </footer>
+  </div>
+
+<script>
+(function(){
+  const fileIn = document.getElementById('file');
+  const canvas = document.getElementById('imgCanvas');
+  const svg = document.getElementById('skeleton');
+  const ctx = canvas.getContext('2d');
+  const opacityRange = document.getElementById('opacity');
+  const jointSizeRange = document.getElementById('jointSize');
+  const toggleBtn = document.getElementById('toggle');
+  const resetBtn = document.getElementById('reset');
+  const exportBtn = document.getElementById('export');
+  let img = new Image();
+  let skeletonVisible = true;
+
+  // A simple stick-figure skeleton defined in normalized coordinates (0..1)
+  const defaultJoints = {
+    head: {x:0.5, y:0.14},
+    neck: {x:0.5, y:0.22},
+    chest: {x:0.5, y:0.32},
+    waist: {x:0.5, y:0.48},
+    leftShoulder: {x:0.38, y:0.26},
+    rightShoulder:{x:0.62, y:0.26},
+    leftElbow:{x:0.3, y:0.42},
+    rightElbow:{x:0.7, y:0.42},
+    leftHand:{x:0.25,y:0.6},
+    rightHand:{x:0.75,y:0.6},
+    leftHip:{x:0.44,y:0.58},
+    rightHip:{x:0.56,y:0.58},
+    leftKnee:{x:0.44,y:0.78},
+    rightKnee:{x:0.56,y:0.78},
+    leftFoot:{x:0.44,y:0.98},
+    rightFoot:{x:0.56,y:0.98}
+  };
+
+  const bones = [
+    ['head','neck'],['neck','chest'],['chest','waist'],
+    ['neck','leftShoulder'],['neck','rightShoulder'],
+    ['leftShoulder','leftElbow'],['leftElbow','leftHand'],
+    ['rightShoulder','rightElbow'],['rightElbow','rightHand'],
+    ['waist','leftHip'],['waist','rightHip'],
+    ['leftHip','leftKnee'],['leftKnee','leftFoot'],
+    ['rightHip','rightKnee'],['rightKnee','rightFoot']
+  ];
+
+  let joints = JSON.parse(JSON.stringify(defaultJoints)); // current joint positions, normalized
+
+  // create svg elements
+  function createSkeletonElements(){
+    svg.innerHTML = '';
+    // group for bones
+    const bonesGroup = document.createElementNS('http://www.w3.org/2000/svg','g');
+    bonesGroup.setAttribute('id','bones');
+    svg.appendChild(bonesGroup);
+    // lines
+    bones.forEach((b,i)=>{
+      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('stroke','white');
+      line.setAttribute('stroke-width','3');
+      line.setAttribute('stroke-linecap','round');
+      line.setAttribute('data-bone',i);
+      bonesGroup.appendChild(line);
+    });
+    // joints
+    Object.keys(joints).forEach(name=>{
+      const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      c.classList.add('joint');
+      c.setAttribute('r', jointSizeRange.value);
+      c.setAttribute('fill','white');
+      c.setAttribute('stroke','black');
+      c.setAttribute('stroke-width','1');
+      c.setAttribute('data-name',name);
+      svg.appendChild(c);
+    });
+  }
+
+  createSkeletonElements();
+
+  function resizeToImage(w,h){
+    canvas.width = w; canvas.height = h;
+    svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
+    svg.style.width = canvas.style.width = '100%';
+    svg.style.height = canvas.style.height = '100%';
+  }
+
+  function drawImage(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(img && img.width){
+      ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    }
+  }
+
+  function updateSkeletonVisual(){
+    const w = canvas.width, h = canvas.height;
+    // lines
+    const lines = svg.querySelectorAll('line');
+    lines.forEach((line,i)=>{
+      const [a,b] = bones[i];
+      const pa = joints[a], pb = joints[b];
+      line.setAttribute('x1', pa.x * w);
+      line.setAttribute('y1', pa.y * h);
+      line.setAttribute('x2', pb.x * w);
+      line.setAttribute('y2', pb.y * h);
+      line.style.opacity = opacityRange.value;
+    });
+    // circles
+    const circles = svg.querySelectorAll('circle.joint');
+    circles.forEach(c=>{
+      const name = c.getAttribute('data-name');
+      const p = joints[name];
+      c.setAttribute('cx', p.x * w);
+      c.setAttribute('cy', p.y * h);
+      c.setAttribute('r', jointSizeRange.value);
+      c.style.opacity = opacityRange.value;
+    });
+  }
+
+  // drag logic
+  let dragging = null;
+  let pointerId = null;
+
+  function getPointerPos(evt){
+    let clientX, clientY;
+    if(evt.touches){ clientX = evt.touches[0].clientX; clientY = evt.touches[0].clientY; }
+    else { clientX = evt.clientX; clientY = evt.clientY; }
+    const rect = svg.getBoundingClientRect();
+    const x = (clientX - rect.left) * (canvas.width / rect.width);
+    const y = (clientY - rect.top) * (canvas.height / rect.height);
+    return {x,y}
+  }
+
+  function onPointerDown(e){
+    const target = e.target;
+    if(target.classList && target.classList.contains('joint')){
+      e.preventDefault();
+      dragging = target.getAttribute('data-name');
+      pointerId = (e.pointerId !== undefined) ? e.pointerId : null;
+      // capture
+      target.setPointerCapture && target.setPointerCapture(pointerId);
+    }
+  }
+
+  function onPointerMove(e){
+    if(!dragging) return;
+    e.preventDefault();
+    const p = getPointerPos(e);
+    joints[dragging].x = Math.max(0, Math.min(1, p.x / canvas.width));
+    joints[dragging].y = Math.max(0, Math.min(1, p.y / canvas.height));
+    updateSkeletonVisual();
+  }
+
+  function onPointerUp(e){
+    if(!dragging) return;
+    const target = svg.querySelector('[data-name="'+dragging+'"]');
+    try{ target.releasePointerCapture && target.releasePointerCapture(pointerId); }catch(e){}
+    dragging = null; pointerId = null;
+  }
+
+  // support mouse/touch
+  svg.addEventListener('mousedown', onPointerDown);
+  window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('mouseup', onPointerUp);
+  svg.addEventListener('touchstart', function(e){ onPointerDown(e); }, {passive:false});
+  window.addEventListener('touchmove', function(e){ onPointerMove(e); }, {passive:false});
+  window.addEventListener('touchend', onPointerUp);
+
+  // file load
+  fileIn.addEventListener('change', (ev)=>{
+    const f = ev.target.files && ev.target.files[0];
+    if(!f) return;
+    const url = URL.createObjectURL(f);
+    img = new Image();
+    img.onload = ()=>{
+      // set canvas size to image pixel size but clamp to max width for display
+      const maxW = 1200; const scale = Math.min(1, maxW / img.width);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      resizeToImage(w,h);
+      drawImage();
+      updateSkeletonVisual();
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  });
+
+  opacityRange.addEventListener('input', ()=>{
+    svg.style.opacity = opacityRange.value; updateSkeletonVisual();
+  });
+  jointSizeRange.addEventListener('input', ()=>{
+    updateSkeletonVisual();
+  });
+
+  toggleBtn.addEventListener('click', ()=>{
+    skeletonVisible = !skeletonVisible;
+    svg.style.display = skeletonVisible ? 'block' : 'none';
+    toggleBtn.textContent = skeletonVisible ? 'Hide skeleton' : 'Show skeleton';
+  });
+
+  resetBtn.addEventListener('click', ()=>{
+    joints = JSON.parse(JSON.stringify(defaultJoints));
+    updateSkeletonVisual();
+  });
+
+  exportBtn.addEventListener('click', ()=>{
+    // draw current image and skeleton onto a temporary canvas to export
+    const w = canvas.width, h = canvas.height;
+    const tmp = document.createElement('canvas'); tmp.width = w; tmp.height = h;
+    const tctx = tmp.getContext('2d');
+    // image
+    if(img && img.width) tctx.drawImage(img,0,0,w,h);
+    // skeleton lines
+    tctx.globalAlpha = opacityRange.value;
+    tctx.lineCap = 'round';
+    tctx.lineWidth = 3;
+    tctx.strokeStyle = '#ffffff';
+    bones.forEach((b)=>{
+      const a = joints[b[0]]; const bb = joints[b[1]];
+      tctx.beginPath(); tctx.moveTo(a.x * w, a.y * h); tctx.lineTo(bb.x * w, bb.y * h); tctx.stroke();
+    });
+    // joints
+    tctx.fillStyle = '#ffffff'; tctx.strokeStyle = '#000000';
+    const jr = parseFloat(jointSizeRange.value);
+    Object.keys(joints).forEach(name=>{
+      const p = joints[name];
+      tctx.beginPath(); tctx.arc(p.x * w, p.y * h, jr, 0, Math.PI*2); tctx.fill(); tctx.stroke();
+    });
+    // save
+    const data = tmp.toDataURL('image/png');
+    const a = document.createElement('a'); a.href = data; a.download = 'character_with_skeleton.png';
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+
+  // initial placeholder canvas
+  function setPlaceholder(){
+    const w = 800, h = 640; resizeToImage(w,h);
+    ctx.fillStyle = '#1a1f23'; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = '#6b7780'; ctx.font = '20px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('Upload an image to begin', w/2, h/2);
+    updateSkeletonVisual();
+  }
+  setPlaceholder();
+
+})();
+</script>
+</body>
+</html>
