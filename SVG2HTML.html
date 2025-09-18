@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Simplifier</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background-color: #ffffff;
+            border-radius: 1.5rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            padding: 2rem;
+        }
+        .textarea-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+        textarea {
+            min-height: 250px;
+            font-family: monospace;
+            resize: vertical;
+            line-height: 1.5;
+            padding: 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.75rem;
+            outline: none;
+            transition: border-color 0.2s ease-in-out;
+        }
+        textarea:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        .help-box {
+            background-color: #f9fafb;
+            border-radius: 0.75rem;
+            padding: 1.25rem;
+            border: 1px dashed #d1d5db;
+        }
+        .preview-box {
+            border: 2px solid #e5e7eb;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            background-color: #fafafa;
+            overflow: hidden;
+            position: relative;
+        }
+        .preview-box svg {
+            max-width: 100%;
+            max-height: 100%;
+            display: block;
+        }
+        .preview-box.empty-state::after {
+            content: 'Simplified SVG Preview';
+            color: #9ca3af;
+            font-size: 1rem;
+        }
+        .copy-button-small {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            background-color: #e5e7eb;
+            color: #4b5563;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+        .copy-button-small:hover {
+            background-color: #d1d5db;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <div class="container">
+        <header class="text-center mb-6">
+            <h1 class="text-4xl font-bold text-gray-800">SVG Simplifier</h1>
+            <p class="text-lg text-gray-500 mt-2">Clean and optimize your SVG code for the web.</p>
+        </header>
+
+        <div class="help-box mb-6">
+            <h2 class="text-xl font-semibold text-gray-700 mb-2">How to get SVG from Google Slides:</h2>
+            <ol class="list-decimal list-inside text-gray-600 space-y-1">
+                <li>Select the object you want to export.</li>
+                <li>Go to `File` > `Download` > `Scalable Vector Graphics (.svg)`.</li>
+                <li>Open the downloaded `.svg` file in a text editor like Notepad, VS Code, or Sublime Text.</li>
+                <li>Copy the entire code and paste it into the box below.</li>
+            </ol>
+        </div>
+
+        <div class="flex flex-col md:flex-row gap-4 mb-6">
+            <div class="flex-1">
+                <label for="input-svg" class="block text-sm font-medium text-gray-700 mb-2">Paste your SVG code here</label>
+                <textarea id="input-svg" placeholder="<svg...></svg>" class="w-full"></textarea>
+            </div>
+            <div class="flex-1">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Live Preview (With Base64 Images)</label>
+                <div id="preview-base64" class="preview-box empty-state"></div>
+                <div class="mt-2 text-sm text-gray-500">
+                    This version includes any embedded images from your original SVG.
+                </div>
+            </div>
+        </div>
+
+        <div class="flex flex-col md:flex-row items-center justify-center gap-4 mt-6">
+            <button id="simplify-button" class="w-full md:w-auto px-6 py-3 bg-indigo-600 text-white font-semibold rounded-full shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50 transition-all duration-300">
+                Simplify SVG
+            </button>
+            <div class="relative w-full md:w-auto flex items-center justify-center">
+                <input type="checkbox" id="remove-base64" class="mr-2 h-4 w-4 text-indigo-600 rounded focus:ring-indigo-500" checked>
+                <label for="remove-base64" class="text-sm text-gray-700">Remove Base64 Images</label>
+            </div>
+        </div>
+
+        <div class="flex flex-col md:flex-row gap-4 mt-6">
+            <div class="flex-1">
+                <label for="output-svg" class="block text-sm font-medium text-gray-700 mb-2">Simplified SVG code</label>
+                <div class="relative">
+                    <textarea id="output-svg" readonly class="w-full bg-gray-50"></textarea>
+                    <button id="copy-output" class="copy-button-small">Copy</button>
+                </div>
+            </div>
+            <div class="flex-1">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Live Preview (Without Base64 Images)</label>
+                <div id="preview-no-base64" class="preview-box empty-state"></div>
+                <div class="mt-2 text-sm text-gray-500">
+                    This version is cleaner and removes all embedded images.
+                </div>
+            </div>
+        </div>
+
+        <div id="message-box" class="mt-6 hidden text-center px-4 py-3 rounded-lg text-sm transition-all duration-300"></div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputSvg = document.getElementById('input-svg');
+            const outputSvg = document.getElementById('output-svg');
+            const simplifyButton = document.getElementById('simplify-button');
+            const copyOutputButton = document.getElementById('copy-output');
+            const previewBase64 = document.getElementById('preview-base64');
+            const previewNoBase64 = document.getElementById('preview-no-base64');
+            const removeBase64Checkbox = document.getElementById('remove-base64');
+            const messageBox = document.getElementById('message-box');
+
+            const showMessage = (text, type = 'success') => {
+                messageBox.textContent = text;
+                messageBox.className = `mt-6 block text-center px-4 py-3 rounded-lg text-sm transition-all duration-300 ${type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`;
+                setTimeout(() => {
+                    messageBox.className = 'mt-6 hidden';
+                }, 3000);
+            };
+
+            const formatSvg = (svgString) => {
+                let formatted = svgString.replace(/>\s*</g, '><');
+                let indent = 0;
+                let result = '';
+                formatted.split(/>\s*</).forEach((part) => {
+                    if (part.startsWith('/')) {
+                        indent--;
+                    }
+                    result += ' '.repeat(indent * 2) + '<' + part + '>\n';
+                    if (!part.startsWith('/') && !part.endsWith('/') && !part.endsWith('/>')) {
+                        indent++;
+                    }
+                });
+                return result.trim();
+            };
+
+            simplifyButton.addEventListener('click', () => {
+                const svgCode = inputSvg.value.trim();
+                if (!svgCode.startsWith('<svg')) {
+                    showMessage('Please enter valid SVG code.', 'error');
+                    return;
+                }
+
+                try {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(svgCode, "image/svg+xml");
+                    const svgElement = doc.documentElement;
+
+                    // Remove unwanted attributes and elements for base simplification
+                    const simplifiedSvgElement = svgElement.cloneNode(true);
+                    const unwantedAttributes = ['style', 'data-'];
+                    simplifiedSvgElement.querySelectorAll('*').forEach(el => {
+                        unwantedAttributes.forEach(attr => {
+                            for (let i = el.attributes.length - 1; i >= 0; i--) {
+                                const attribute = el.attributes[i];
+                                if (attribute.name.startsWith(attr)) {
+                                    el.removeAttribute(attribute.name);
+                                }
+                            }
+                        });
+                        if (el.tagName.toLowerCase() === 'g' && el.childElementCount === 0) {
+                             el.remove();
+                        }
+                    });
+
+                    // Remove base64 images based on checkbox
+                    const finalSvgElement = simplifiedSvgElement.cloneNode(true);
+                    if (removeBase64Checkbox.checked) {
+                        finalSvgElement.querySelectorAll('image').forEach(img => {
+                             img.remove();
+                        });
+                    }
+
+                    // Render previews
+                    previewBase64.innerHTML = new XMLSerializer().serializeToString(simplifiedSvgElement);
+                    previewBase64.classList.remove('empty-state');
+                    
+                    previewNoBase64.innerHTML = new XMLSerializer().serializeToString(finalSvgElement);
+                    previewNoBase64.classList.remove('empty-state');
+
+                    // Set the final SVG code in the output textarea
+                    outputSvg.value = formatSvg(new XMLSerializer().serializeToString(finalSvgElement));
+                    showMessage('SVG simplified and previews generated!');
+
+                } catch (e) {
+                    console.error("Error simplifying SVG:", e);
+                    showMessage('An error occurred. Please check your SVG code.', 'error');
+                }
+            });
+
+            copyOutputButton.addEventListener('click', () => {
+                outputSvg.select();
+                try {
+                    document.execCommand('copy');
+                    showMessage('Code copied to clipboard!');
+                } catch (err) {
+                    console.error('Could not copy text: ', err);
+                    showMessage('Failed to copy text.', 'error');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
