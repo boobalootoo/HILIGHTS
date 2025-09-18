@@ -1,0 +1,337 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>CRT Screen Effect — Upload image or use camera</title>
+  <style>
+    :root{--bg:#0b0b0b;--ui:#101214;--accent:#6ef;}
+    html,body{height:100%;margin:0;background:var(--bg);color:#ddd;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    .app{display:grid;grid-template-columns:1fr 360px;gap:18px;height:100vh;padding:18px;box-sizing:border-box}
+    .preview{position:relative;border-radius:12px;overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center}
+    canvas{width:100%;height:100%;display:block}
+    .controls{background:linear-gradient(180deg,#0f1113,#0b0b0b);padding:16px;border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.6);height:100%;box-sizing:border-box}
+    .controls h2{margin:0 0 12px 0;font-size:16px}
+    .row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+    label{font-size:13px;color:#cbd5e1}
+    input[type=range]{width:100%}
+    .small{font-size:12px;color:#9aa3b2}
+    .btn{appearance:none;border:0;padding:8px 10px;border-radius:8px;background:var(--ui);color:#fff;cursor:pointer}
+    .file{display:block;padding:10px;background:#0d0f11;border-radius:8px;border:1px dashed #222;color:#9aa3b2;text-align:center;cursor:pointer}
+    .footer{font-size:12px;color:#889;position:absolute;left:12px;bottom:12px}
+    @media (max-width:900px){.app{grid-template-columns:1fr;grid-auto-rows:1fr 260px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="preview" id="preview">
+      <canvas id="glcanvas"></canvas>
+      <div class="footer">Tip: drag an image into the panel or use Camera → Start</div>
+    </div><aside class="controls">
+  <h2>CRT Screen — Source</h2>
+  <div class="row">
+    <input id="fileInput" class="file" type="file" accept="image/*" />
+  </div>
+  <div class="row">
+    <button id="startCam" class="btn">Start Camera</button>
+    <button id="stopCam" class="btn" style="margin-left:6px">Stop Camera</button>
+  </div>
+
+  <hr style="opacity:.06;margin:12px 0">
+  <h2>CRT Controls</h2>
+  <div class="row"><label class="small">Scanline Intensity</label></div>
+  <div class="row"><input id="scanIntensity" type="range" min="0" max="2" step="0.01" value="0.9"/></div>
+
+  <div class="row"><label class="small">Scanline Density</label></div>
+  <div class="row"><input id="scanDensity" type="range" min="200" max="1200" step="1" value="800"/></div>
+
+  <div class="row"><label class="small">Curvature</label></div>
+  <div class="row"><input id="curvature" type="range" min="0" max="1.2" step="0.01" value="0.45"/></div>
+
+  <div class="row"><label class="small">Chromatic Aberration</label></div>
+  <div class="row"><input id="chroma" type="range" min="0" max="0.02" step="0.0005" value="0.005"/></div>
+
+  <div class="row"><label class="small">Noise / Static</label></div>
+  <div class="row"><input id="noise" type="range" min="0" max="0.6" step="0.01" value="0.12"/></div>
+
+  <div class="row"><label class="small">Flicker</label></div>
+  <div class="row"><input id="flicker" type="range" min="0" max="1.6" step="0.01" value="0.08"/></div>
+
+  <div class="row"><label class="small">Contrast Boost</label></div>
+  <div class="row"><input id="contrast" type="range" min="0.2" max="2.2" step="0.01" value="1.1"/></div>
+
+  <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+    <button id="fit" class="btn">Fit Image</button>
+    <button id="fullscreen" class="btn">Toggle Fullscreen</button>
+  </div>
+
+  <p style="margin-top:12px;color:#9aa3b2;font-size:13px">This uses WebGL for realtime effects. Works with images you upload or your camera. On mobile, allow camera access and use back camera for best results.</p>
+</aside>
+
+  </div><video id="video" autoplay playsinline style="display:none"></video>
+
+  <script>
+  // ---- Utilities: WebGL setup and shader program ----
+  const canvas = document.getElementById('glcanvas');
+  const gl = canvas.getContext('webgl');
+  if(!gl){
+    document.getElementById('preview').innerHTML = '<div style="color:#fff;padding:20px">WebGL not supported in this browser.</div>';
+    throw new Error('WebGL not supported');
+  }
+
+  // Vertex shader (simple pass-through)
+  const vsSource = `attribute vec2 a_position;varying vec2 v_uv;void main(){v_uv = a_position*0.5+0.5;gl_Position = vec4(a_position,0.0,1.0);}`;
+
+  // Fragment shader: CRT-style effects (curvature, scanlines, chroma, noise, flicker)
+  const fsSource = `precision mediump float;
+  varying vec2 v_uv;
+  uniform sampler2D u_texture;
+  uniform vec2 u_resolution;
+  uniform float u_time;
+  uniform float u_scanIntensity;
+  uniform float u_scanDensity;
+  uniform float u_curvature;
+  uniform float u_chroma;
+  uniform float u_noise;
+  uniform float u_flicker;
+  uniform float u_contrast;
+
+  // random based on uv
+  float rand(vec2 co){return fract(sin(dot(co.xy,vec2(12.9898,78.233))) * 43758.5453);}
+
+  // apply barrel distortion (curvature)
+  vec2 curveUV(vec2 uv){
+    vec2 cc = uv - 0.5;
+    float r = length(cc);
+    float k = u_curvature * 1.2; // strength
+    cc *= mix(1.0, 1.0 + k * r * r, 1.0);
+    return cc + 0.5;
+  }
+
+  // sample with chromatic offsets
+  vec3 sampleWithChroma(vec2 uv){
+    float c = u_chroma;
+    vec2 off = vec2(c,0.0);
+    float t = u_time*0.6;
+    // slight oscillation for analog wobble
+    float wob = sin(t*2.0)*0.0006;
+    vec3 r = texture2D(u_texture, uv + off + wob).rgg; // intentionally staggered
+    vec3 g = texture2D(u_texture, uv).rgb;
+    vec3 b = texture2D(u_texture, uv - off - wob).bbr;
+    return vec3(r.r, g.g, b.b);
+  }
+
+  void main(){
+    vec2 uv = v_uv;
+    // correct aspect so curvature feels right
+    uv = vec2(uv.x, uv.y);
+
+    // apply curvature
+    uv = curveUV(uv);
+
+    // outside of screen -> black vignette
+    if(uv.x<0.0 || uv.x>1.0 || uv.y<0.0 || uv.y>1.0){gl_FragColor = vec4(0.0);return;}
+
+    // scanline effect
+    float scan = sin((uv.y * u_scanDensity) + (u_time*120.0)) * 0.5 + 0.5; // 0..1
+    float scanline = mix(1.0, scan, u_scanIntensity);
+
+    // texture with chroma
+    vec3 col = sampleWithChroma(uv);
+
+    // apply contrast
+    col = ((col - 0.5) * u_contrast) + 0.5;
+
+    // noise
+    float n = (rand(uv * u_time) - 0.5) * u_noise;
+
+    // flicker (temporal brightness wobble)
+    float flick = 1.0 + sin(u_time*60.0) * u_flicker * 0.5 + (rand(vec2(u_time, uv.y))*u_flicker*0.2);
+
+    // phosphor glow: simple soft bloom using neighbors (cheap)
+    vec3 glow = (
+      texture2D(u_texture, uv + vec2(0.001,0.0)).rgb +
+      texture2D(u_texture, uv + vec2(-0.001,0.0)).rgb +
+      texture2D(u_texture, uv + vec2(0.0,0.001)).rgb +
+      texture2D(u_texture, uv + vec2(0.0,-0.001)).rgb
+    ) * 0.12;
+
+    vec3 outCol = (col + glow) * scanline * flick + n;
+
+    // apply slight vignette to mimic CRT mask
+    float dx = (uv.x-0.5); float dy = (uv.y-0.5);
+    float vign = smoothstep(0.8,0.3, sqrt(dx*dx + dy*dy));
+    outCol *= vign;
+
+    gl_FragColor = vec4(outCol,1.0);
+  }
+  `;
+
+  // compile helpers
+  function compileShader(type, source){
+    const s = gl.createShader(type); gl.shaderSource(s, source); gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      console.error(gl.getShaderInfoLog(s)); throw new Error('Shader compile failed');
+    }
+    return s;
+  }
+
+  function createProgram(vs, fs){
+    const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+    if(!gl.getProgramParameter(p, gl.LINK_STATUS)){
+      console.error(gl.getProgramInfoLog(p)); throw new Error('Program link failed');
+    }
+    return p;
+  }
+
+  const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+  const program = createProgram(vs, fs);
+  gl.useProgram(program);
+
+  // fullscreen quad
+  const posLoc = gl.getAttribLocation(program, 'a_position');
+  const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  const verts = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+  gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc,2,gl.FLOAT,false,0,0);
+
+  // uniforms
+  const uniforms = {};
+  ['u_time','u_resolution','u_scanIntensity','u_scanDensity','u_curvature','u_chroma','u_noise','u_flicker','u_contrast'].forEach(n=>{uniforms[n] = gl.getUniformLocation(program,n)});
+
+  // create texture
+  const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  function resizeCanvasToDisplaySize(){
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if(canvas.width !== width || canvas.height !== height){
+      canvas.width = width; canvas.height = height; gl.viewport(0,0,canvas.width,canvas.height);
+    }
+    gl.uniform2f(uniforms.u_resolution, canvas.width, canvas.height);
+  }
+
+  // source (image or video)
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  let usingVideo = false;
+  const video = document.getElementById('video');
+  let stream = null;
+
+  function updateTextureFromImage(img){
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    try{ gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img); }catch(e){
+      // fallback draw to canvas then texImage2D
+      const tmp = document.createElement('canvas'); tmp.width=img.width; tmp.height=img.height; tmp.getContext('2d').drawImage(img,0,0);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,tmp);
+    }
+  }
+
+  function updateTextureFromVideo(){
+    if(video.readyState < 2) return;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,video);
+  }
+
+  // UI bindings
+  const fileInput = document.getElementById('fileInput');
+  const startCam = document.getElementById('startCam');
+  const stopCam = document.getElementById('stopCam');
+  const fitBtn = document.getElementById('fit');
+  const fullscreenBtn = document.getElementById('fullscreen');
+
+  const params = {
+    u_scanIntensity: parseFloat(document.getElementById('scanIntensity').value),
+    u_scanDensity: parseFloat(document.getElementById('scanDensity').value),
+    u_curvature: parseFloat(document.getElementById('curvature').value),
+    u_chroma: parseFloat(document.getElementById('chroma').value),
+    u_noise: parseFloat(document.getElementById('noise').value),
+    u_flicker: parseFloat(document.getElementById('flicker').value),
+    u_contrast: parseFloat(document.getElementById('contrast').value)
+  };
+
+  ['scanIntensity','scanDensity','curvature','chroma','noise','flicker','contrast'].forEach(id=>{
+    document.getElementById(id).addEventListener('input', e=>{ params['u_'+id] = parseFloat(e.target.value); });
+  });
+
+  fileInput.addEventListener('change', async(e)=>{
+    stopCameraStream();
+    const f = e.target.files && e.target.files[0];
+    if(!f) return;
+    const url = URL.createObjectURL(f);
+    image.onload = ()=>{ updateTextureFromImage(image); usingVideo=false; }; image.src = url;
+  });
+
+  // drag and drop
+  const preview = document.getElementById('preview');
+  preview.addEventListener('dragover', e=>{ e.preventDefault(); preview.style.opacity=0.9; });
+  preview.addEventListener('dragleave', e=>{ preview.style.opacity=1; });
+  preview.addEventListener('drop', e=>{ e.preventDefault(); preview.style.opacity=1; const f = e.dataTransfer.files && e.dataTransfer.files[0]; if(f && f.type.startsWith('image/')){ const u = URL.createObjectURL(f); image.onload = ()=>{ updateTextureFromImage(image); usingVideo=false; }; image.src = u; } });
+
+  async function startCameraStream(){
+    stopCameraStream();
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
+      video.srcObject = stream; await video.play(); usingVideo = true;
+    }catch(err){alert('Camera access denied or not available.'); console.warn(err);} }
+
+  function stopCameraStream(){
+    if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+    usingVideo=false;
+  }
+  startCam.addEventListener('click', startCameraStream);
+  stopCam.addEventListener('click', stopCameraStream);
+
+  fitBtn.addEventListener('click', ()=>{
+    // fit image/video to canvas by adjusting sample transform in shader is automatic — but we can ensure canvas aspect matches preview container
+    resizeCanvasToDisplaySize();
+  });
+
+  fullscreenBtn.addEventListener('click', ()=>{
+    if(!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen();
+  });
+
+  // animation loop
+  let lastTime = performance.now()/1000;
+  function render(now){
+    now = now/1000; const dt = now - lastTime; lastTime = now;
+    resizeCanvasToDisplaySize();
+
+    // update texture from source
+    if(usingVideo) updateTextureFromVideo();
+
+    // set uniforms
+    gl.uniform1f(uniforms.u_time, now);
+    gl.uniform1f(uniforms.u_scanIntensity, params.u_scanIntensity);
+    gl.uniform1f(uniforms.u_scanDensity, params.u_scanDensity);
+    gl.uniform1f(uniforms.u_curvature, params.u_curvature);
+    gl.uniform1f(uniforms.u_chroma, params.u_chroma);
+    gl.uniform1f(uniforms.u_noise, params.u_noise);
+    gl.uniform1f(uniforms.u_flicker, params.u_flicker);
+    gl.uniform1f(uniforms.u_contrast, params.u_contrast);
+
+    // draw
+    gl.drawArrays(gl.TRIANGLES,0,6);
+    requestAnimationFrame(render);
+  }
+
+  // initialize with a soft default texture (black)
+  const initImg = new Image(); initImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAQAAQAB/6Xc2QAAAABJRU5ErkJggg=='; initImg.onload = ()=>{ updateTextureFromImage(initImg); requestAnimationFrame(render); };
+
+  // responsive
+  window.addEventListener('resize', ()=>resizeCanvasToDisplaySize());
+
+  // stop camera when page hidden
+  document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopCameraStream(); });
+
+  // allow tapping canvas to pause video texture (helpful on mobile)
+  canvas.addEventListener('click', ()=>{ if(usingVideo){ if(video.paused) video.play(); else video.pause(); } });
+  </script></body>
+</html>
