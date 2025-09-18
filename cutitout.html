@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Image Cutout Tool — Fixed</title>
+  <style>
+    :root{--toolbar-bg:rgba(255,255,255,0.95)}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    #toolbar{
+      position:fixed;left:12px;top:12px;z-index:60;background:var(--toolbar-bg);padding:10px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.12);
+      display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:calc(100% - 40px)
+    }
+    #toolbar input[type=file]{display:inline-block}
+    #toolbar button{padding:6px 10px;border-radius:8px;border:1px solid #ddd;background:#fafafa;cursor:pointer}
+    #toolbar button.active{background:#2563eb;color:white;border-color:#1e40af}
+    #toolbar .small{padding:6px 8px;font-size:13px}
+
+    canvas{display:block;touch-action:none}
+
+    #output{
+      position:fixed;right:12px;top:12px;z-index:55;display:flex;flex-direction:column;gap:8px;max-height:calc(100% - 24px);overflow:auto;padding:6px;background:rgba(255,255,255,0.9);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.08)
+    }
+    #output img{width:120px;height:auto;border-radius:6px;border:1px solid #e5e7eb}
+
+    /* instruction pill */
+    #hint{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;background:rgba(0,0,0,0.7);color:white;padding:8px 12px;border-radius:999px;font-size:13px;z-index:70}
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <input id="fileInput" type="file" accept="image/*" />
+    <button id="panBtn">Pan</button>
+    <button id="freehandBtn">Freehand</button>
+    <button id="lineBtn">Line</button>
+    <button id="rectBtn">Rectangle</button>
+    <button id="circleBtn">Circle</button>
+    <button id="polyBtn">Polygon</button>
+    <button id="finishPolyBtn" class="small">Finish Polygon</button>
+    <button id="zoomInBtn">Zoom +</button>
+    <button id="zoomOutBtn">Zoom -</button>
+    <button id="clearBtn" style="background:#ef4444;color:white">Reset Image</button>
+    <button id="toggleCutsBtn" class="small">Hide Cutouts</button>
+  </div>
+
+  <div id="output" aria-hidden="false"></div>
+  <div id="hint">Tip: click a tool to select; click again to deselect. For polygon: click to add vertices, then "Finish Polygon" or double-click to close.</div>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+    // --- Helpers & state -------------------------------------------------
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', {alpha:true});
+    const out = document.getElementById('output');
+
+    // toolbar buttons
+    const tools = {
+      pan: document.getElementById('panBtn'),
+      freehand: document.getElementById('freehandBtn'),
+      line: document.getElementById('lineBtn'),
+      rect: document.getElementById('rectBtn'),
+      circle: document.getElementById('circleBtn'),
+      poly: document.getElementById('polyBtn'),
+      finishPoly: document.getElementById('finishPolyBtn'),
+      zoomIn: document.getElementById('zoomInBtn'),
+      zoomOut: document.getElementById('zoomOutBtn'),
+      clear: document.getElementById('clearBtn'),
+      toggleCuts: document.getElementById('toggleCutsBtn')
+    };
+
+    let img = new Image();
+    let imgLoaded = false;
+    let imgX = 0, imgY = 0; // top-left on canvas
+    let scale = 1;
+
+    let activeTool = null; // null or 'pan','freehand','line','rect','circle','poly'
+    let drawing = false;
+    let isPanning = false;
+    let path = []; // array of {x,y} in canvas coords
+    let cutoutsVisible = true;
+
+    // safe wrapper to add/remove active class
+    function setActiveTool(newTool){
+      if(activeTool === newTool){
+        activeTool = null; // deselect
+      } else {
+        activeTool = newTool;
+      }
+      // update UI
+      Object.keys(tools).forEach(k => {
+        const el = tools[k];
+        if(!el) return;
+        if(k === activeTool) el.classList.add('active'); else el.classList.remove('active');
+      });
+      // when selecting a drawing tool, ensure not panning
+      isPanning = false;
+      drawing = false;
+      path = [];
+      draw();
+    }
+
+    // wire buttons
+    tools.pan.addEventListener('click', () => setActiveTool('pan'));
+    tools.freehand.addEventListener('click', () => setActiveTool('freehand'));
+    tools.line.addEventListener('click', () => setActiveTool('line'));
+    tools.rect.addEventListener('click', () => setActiveTool('rect'));
+    tools.circle.addEventListener('click', () => setActiveTool('circle'));
+    tools.poly.addEventListener('click', () => setActiveTool('poly'));
+    tools.finishPoly.addEventListener('click', finishPolygon);
+    tools.zoomIn.addEventListener('click', () => {
+      if(!imgLoaded) return; scale = Math.min(6, scale * 1.2); draw();
+    });
+    tools.zoomOut.addEventListener('click', () => { if(!imgLoaded) return; scale = Math.max(0.1, scale / 1.2); draw(); });
+    tools.clear.addEventListener('click', resetImage);
+    tools.toggleCuts.addEventListener('click', () => { cutoutsVisible = !cutoutsVisible; out.style.display = cutoutsVisible ? 'flex':'none'; tools.toggleCuts.textContent = cutoutsVisible ? 'Hide Cutouts' : 'Show Cutouts'; });
+
+    // file input
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        img.onload = () => {
+          imgLoaded = true;
+          // center image
+          scale = 1;
+          imgX = Math.max(10, (canvas.width - img.width)/2);
+          imgY = Math.max(10, (canvas.height - img.height)/2);
+          draw();
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // resize canvas to full window
+    function resize(){
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.setTransform(dpr,0,0,dpr,0,0); // keep drawing in CSS pixels
+      draw();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // get mouse position in canvas CSS pixels
+    function mousePos(e){
+      const rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    // check if a point is inside the displayed image rectangle
+    function pointInImage(px,py){
+      return imgLoaded && px >= imgX && py >= imgY && px <= imgX + img.width*scale && py <= imgY + img.height*scale;
+    }
+
+    // main draw: image, highlight edges, current path preview
+    function draw(){
+      // clear (in CSS pixels)
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      if(imgLoaded){
+        // draw image at imgX,imgY with scaling
+        ctx.drawImage(img, imgX, imgY, img.width * scale, img.height * scale);
+
+        // highlight edges
+        ctx.save();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#ef4444';
+        ctx.strokeRect(imgX - 1, imgY - 1, img.width * scale + 2, img.height * scale + 2);
+        ctx.restore();
+      } else {
+        // no image: show placeholder background
+        ctx.fillStyle = '#dbeafe';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+      }
+
+      // draw current path preview if drawing
+      if(drawing && path.length > 0){
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(path[0].x, path[0].y);
+        for(let i=1;i<path.length;i++) ctx.lineTo(path[i].x, path[i].y);
+        if(activeTool !== 'freehand' && activeTool !== 'line') ctx.closePath();
+        ctx.lineWidth = Math.max(2, 2);
+        ctx.strokeStyle = '#2563eb';
+        ctx.stroke();
+        ctx.restore();
+
+        // draw small handles for polygon vertices
+        if(activeTool === 'poly'){
+          ctx.fillStyle = '#2563eb';
+          for(let i=0;i<path.length;i++) ctx.fillRect(path[i].x-3, path[i].y-3, 6,6);
+        }
+      }
+    }
+
+    // ------------------ mouse/touch events ------------------------------
+    let panStart = null;
+
+    canvas.addEventListener('mousedown', (ev) => {
+      if(!imgLoaded) return;
+      const p = mousePos(ev);
+
+      // clicking outside the image should do nothing for drawing tools
+      if(activeTool && !pointInImage(p.x,p.y) && activeTool !== 'pan'){
+        // but allow starting polygon outside if user wants
+        // ignore
+        return;
+      }
+
+      if(activeTool === 'pan'){
+        isPanning = true;
+        panStart = {x: ev.clientX, y: ev.clientY};
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+
+      if(['freehand','line','rect','circle'].includes(activeTool)){
+        drawing = true;
+        path = [{x: p.x, y: p.y}];
+        // for shapes that need a second point, precreate a second slot so mousemove can update it
+        if(['line','rect','circle'].includes(activeTool)) path[1] = {x: p.x, y: p.y};
+        draw();
+        return;
+      }
+
+      if(activeTool === 'poly'){
+        // polygon: click to add vertices. If starting, create path; else add
+        if(!drawing){ drawing = true; path = [{x:p.x,y:p.y}]; // start with one vertex and a temp
+          // add a temporary second point so mousemove can update it
+          path.push({x:p.x,y:p.y});
+        } else {
+          // add a new vertex before the temporary last
+          path.splice(path.length-1, 0, {x:p.x,y:p.y});
+        }
+        draw();
+        return;
+      }
+
+    });
+
+    canvas.addEventListener('mousemove', (ev) => {
+      if(!imgLoaded) return;
+      const p = mousePos(ev);
+
+      if(isPanning && panStart){
+        const dx = ev.clientX - panStart.x;
+        const dy = ev.clientY - panStart.y;
+        imgX += dx; imgY += dy;
+        panStart = {x: ev.clientX, y: ev.clientY};
+        draw();
+        return;
+      }
+
+      if(drawing && activeTool){
+        if(activeTool === 'freehand'){
+          path.push({x:p.x,y:p.y});
+        } else if(['line','rect','circle'].includes(activeTool)){
+          if(path.length < 2) path[1] = {x:p.x,y:p.y}; else path[1].x = p.x, path[1].y = p.y;
+        } else if(activeTool === 'poly'){
+          // update temporary last point
+          if(path.length > 0) path[path.length-1] = {x:p.x,y:p.y};
+        }
+        draw();
+      }
+    });
+
+    canvas.addEventListener('mouseup', (ev) => {
+      if(isPanning){ isPanning = false; panStart = null; canvas.style.cursor='default'; return; }
+      if(!drawing) return;
+
+      // guard: ensure path has at least what's needed
+      const safeLen = path ? path.length : 0;
+      if(activeTool === 'freehand'){
+        if(safeLen >= 2){ applyCut(path.slice()); }
+      } else if(activeTool === 'line'){
+        if(safeLen >= 2){
+          // create a polygon that extends to image bottom (simple behaviour)
+          const p0 = path[0], p1 = path[1];
+          const bottom = imgY + img.height * scale;
+          const poly = [p0, p1, {x: p1.x, y: bottom}, {x: p0.x, y: bottom}];
+          applyCut(poly);
+        }
+      } else if(activeTool === 'rect'){
+        if(safeLen >= 2){
+          const a = path[0], b = path[1];
+          const poly = [ {x:a.x,y:a.y}, {x:b.x,y:a.y}, {x:b.x,y:b.y}, {x:a.x,y:b.y} ];
+          applyCut(poly);
+        }
+      } else if(activeTool === 'circle'){
+        if(safeLen >= 2){
+          const a = path[0], b = path[1];
+          const cx = (a.x+b.x)/2, cy = (a.y+b.y)/2;
+          const r = Math.hypot(b.x - a.x, b.y - a.y)/2;
+          applyCircleCut(cx,cy,r);
+        }
+      } else if(activeTool === 'poly'){
+        // on mouseup we treat it as adding a vertex (if click). To actually finish the polygon
+        // user should double-click or press "Finish Polygon". We'll not apply here to avoid accidental cuts.
+        // However, if the user clicked and the temporary last is very close to the first vertex, finish.
+        if(safeLen >= 3){
+          const first = path[0];
+          const last = path[path.length-1];
+          const dist = Math.hypot(first.x - last.x, first.y - last.y);
+          if(dist < 8){ // close and cut
+            // remove temporary last then apply
+            path.pop();
+            applyCut(path.slice());
+            drawing = false; path = [];
+            draw();
+            return;
+          }
+        }
+      }
+
+      // finish drawing state for single-drag tools
+      if(activeTool !== 'poly'){
+        drawing = false;
+        path = [];
+        draw();
+      } else {
+        // for polygon keep last vertex as temporary until finish
+        if(drawing && path.length > 0){
+          // add a new temporary point so next mousemove will update it
+          path[path.length-1] = path[path.length-1] || path[path.length-2] || {x:0,y:0};
+        }
+      }
+    });
+
+    // double-click also finishes polygon
+    canvas.addEventListener('dblclick', (ev) => {
+      if(activeTool === 'poly' && drawing && path.length >= 3){
+        // remove temporary last (it's the mouse position)
+        if(path.length > 1) path.pop();
+        if(path.length >= 3) applyCut(path.slice());
+        drawing = false; path = []; draw();
+      }
+    });
+
+    // finish polygon helper button
+    function finishPolygon(){
+      if(activeTool === 'poly' && drawing && path.length >= 3){
+        // remove temp last if exists
+        if(path.length > 1) path.pop();
+        applyCut(path.slice());
+        drawing = false; path = []; draw();
+      }
+    }
+
+    // -------------------- Cutting / mask logic ---------------------------
+    function applyCut(points){
+      if(!imgLoaded) return;
+      if(!points || points.length < 3) return; // need at least a triangle
+
+      // create mask canvas sized to CSS-pixels
+      const mask = document.createElement('canvas');
+      const rect = canvas.getBoundingClientRect();
+      mask.width = rect.width;
+      mask.height = rect.height;
+      const mctx = mask.getContext('2d');
+
+      // draw polygon onto mask (in canvas coords)
+      mctx.fillStyle = 'black';
+      mctx.beginPath();
+      mctx.moveTo(points[0].x, points[0].y);
+      for(let i=1;i<points.length;i++) mctx.lineTo(points[i].x, points[i].y);
+      mctx.closePath();
+      mctx.fill();
+
+      // create the cutout thumbnail: draw image clipped by the mask
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = mask.width;
+      thumbCanvas.height = mask.height;
+      const tctx = thumbCanvas.getContext('2d');
+
+      tctx.save();
+      tctx.drawImage(mask,0,0);
+      tctx.globalCompositeOperation = 'source-in';
+      // draw the current image snapshot (what is on canvas) onto the thumb; use same coordinates
+      tctx.drawImage(img, imgX, imgY, img.width * scale, img.height * scale);
+      tctx.restore();
+
+      // add thumbnail (scaled) to output container
+      const thumb = document.createElement('img');
+      // scale down to reasonable size to reduce memory if large
+      const maxThumb = 300;
+      const scaleThumb = Math.min(1, maxThumb / Math.max(thumbCanvas.width, thumbCanvas.height));
+      if(scaleThumb < 1){
+        const small = document.createElement('canvas');
+        small.width = Math.round(thumbCanvas.width * scaleThumb);
+        small.height = Math.round(thumbCanvas.height * scaleThumb);
+        small.getContext('2d').drawImage(thumbCanvas, 0, 0, small.width, small.height);
+        thumb.src = small.toDataURL('image/png');
+      } else {
+        thumb.src = thumbCanvas.toDataURL('image/png');
+      }
+      thumb.alt = 'Cutout';
+      out.prepend(thumb);
+
+      // apply cut to main canvas by using destination-out with the mask
+      // We'll draw the mask onto the main canvas using it as alpha
+      // create an offscreen canvas equal to visible canvas and draw the mask then use it to punch out
+      const punch = document.createElement('canvas');
+      punch.width = mask.width; punch.height = mask.height;
+      const pctx = punch.getContext('2d');
+      // draw mask as alpha (black shape)
+      pctx.drawImage(mask,0,0);
+      // punch out from the main canvas by compositing
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.drawImage(punch,0,0);
+      ctx.restore();
+
+      // after destructive edit, also update the image backing if desired: we keep the image as-is
+      // so the red edge and further cuts will remain consistent (canvas now changed)
+    }
+
+    function applyCircleCut(cx,cy,r){
+      if(!imgLoaded) return;
+      if(r <= 0) return;
+      const mask = document.createElement('canvas');
+      const rect = canvas.getBoundingClientRect();
+      mask.width = rect.width; mask.height = rect.height;
+      const mctx = mask.getContext('2d');
+      mctx.fillStyle = 'black';
+      mctx.beginPath();
+      mctx.arc(cx, cy, r, 0, Math.PI * 2);
+      mctx.fill();
+
+      // thumbnail
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = mask.width; thumbCanvas.height = mask.height;
+      const tctx = thumbCanvas.getContext('2d');
+      tctx.save(); tctx.drawImage(mask,0,0); tctx.globalCompositeOperation = 'source-in';
+      tctx.drawImage(img, imgX, imgY, img.width*scale, img.height*scale); tctx.restore();
+
+      const thumb = document.createElement('img');
+      thumb.src = thumbCanvas.toDataURL('image/png');
+      out.prepend(thumb);
+
+      // punch out
+      ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask,0,0); ctx.restore();
+    }
+
+    // reset canvas to the loaded image (removes cuts)
+    function resetImage(){
+      if(!imgLoaded) return;
+      // redraw the original image onto a fresh canvas state by reloading it into an offscreen canvas
+      const orig = document.createElement('canvas');
+      orig.width = canvas.width; orig.height = canvas.height;
+      const octx = orig.getContext('2d');
+      octx.drawImage(img, imgX, imgY, img.width*scale, img.height*scale);
+      // clear main canvas and redraw original image area
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(img, imgX, imgY, img.width*scale, img.height*scale);
+      // clear thumbnails
+      out.innerHTML = '';
+    }
+
+    // initial draw
+    draw();
+
+    // prevent context menu on canvas to allow right-click gestures if needed later
+    canvas.addEventListener('contextmenu', (e)=>e.preventDefault());
+
+    // small nicety: keyboard shortcuts
+    window.addEventListener('keydown', (e) => {
+      if(e.key === 'Escape') { setActiveTool(null); }
+      if(e.key === 'z' && (e.ctrlKey || e.metaKey)) { /* future undo hook */ }
+    });
+
+    // ensure we never attempt to read path[0].x or path[1].x unless it's present
+    // that's already covered by guards in mouseup and applyCut
+
+  </script>
+</body>
+</html>
