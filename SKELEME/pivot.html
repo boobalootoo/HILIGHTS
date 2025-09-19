@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Articulated SVG Studio — hierarchical + IK + save/load</title>
+<style>
+  :root{--bg:#f7fafc;--panel:#fff;--accent:#2563eb}
+  html,body{height:100%;margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg)}
+  .topbar{display:flex;gap:8px;padding:10px;background:var(--panel);align-items:center;box-shadow:0 2px 6px rgba(0,0,0,.06)}
+  label.file{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;border:1px dashed #cbd5e1;background:#fff;cursor:pointer}
+  button{padding:8px 10px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer}
+  button.primary{background:var(--accent);color:#fff;border-color:#1e40af}
+  #main{display:flex;gap:12px;padding:12px;height:calc(100% - 64px);box-sizing:border-box}
+  #stageWrap{flex:1;background:#ffffff;border-radius:12px;padding:12px;display:flex;justify-content:center;align-items:center;overflow:auto}
+  svg#stage{background:#fff;border:1px solid #e6e6e6;max-width:100%;height:auto}
+  #sidebar{width:360px;background:var(--panel);border-radius:12px;padding:12px;box-shadow:0 2px 6px rgba(0,0,0,.04);overflow:auto}
+  .section{margin-bottom:12px}
+  .hint{font-size:13px;color:#475569}
+  .part-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9}
+  .pivot{fill:orange;stroke:#000;stroke-width:1;cursor:grab}
+  .link-line{stroke:#64748b;stroke-dasharray:4 2;stroke-width:1}
+  .selected{outline:2px solid #2563eb}
+  input[type=range]{width:100%}
+  .small{font-size:13px;padding:6px 8px;border-radius:6px}
+  .muted{color:#64748b;font-size:13px}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <label class="file">
+    <input id="svgLoader" type="file" accept=".svg" style="display:none">
+    📂 Upload SVG
+  </label>
+
+  <button id="autoPivots" class="small">Auto pivots</button>
+  <button id="clearPivots" class="small">Clear pivots</button>
+
+  <button id="exportSVG" class="primary">Export Posed SVG</button>
+  <button id="exportPNG">Export Posed PNG</button>
+
+  <div style="flex:1"></div>
+
+  <label class="muted">IK:
+    <input id="ikToggle" type="checkbox" style="margin-left:6px">
+  </label>
+
+  <button id="saveProject" class="small">Save Project (.json)</button>
+  <label class="file small">
+    <input id="loadProject" type="file" accept=".json" style="display:none">
+    Load Project
+  </label>
+</div>
+
+<div id="main">
+  <div id="stageWrap">
+    <svg id="stage" width="1200" height="1200" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+  <div id="sidebar">
+    <div class="section">
+      <h3>Parts</h3>
+      <div id="partsList" class="hint">Upload an SVG to populate parts.</div>
+    </div>
+
+    <div class="section">
+      <h3>Selected Part</h3>
+      <div id="selectedInfo" class="hint">No selection</div>
+      <div style="margin-top:8px">
+        <label>Parent:
+          <select id="parentSelect"></select>
+        </label>
+      </div>
+      <div style="margin-top:8px">
+        <label>Min angle: <span id="minAngleLbl">-180°</span></label>
+        <input id="minAngle" type="range" min="-180" max="180" value="-180">
+        <label>Max angle: <span id="maxAngleLbl">180°</span></label>
+        <input id="maxAngle" type="range" min="-180" max="180" value="180">
+      </div>
+      <div style="margin-top:8px; display:flex; gap:6px;">
+        <button id="resetTransforms" class="small">Reset transforms</button>
+        <button id="fitView" class="small">Fit view</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Visualization</h3>
+      <label><input id="showPivots" type="checkbox" checked> Show pivots</label><br>
+      <label><input id="showLinks" type="checkbox" checked> Show parent links</label><br>
+      <label><input id="showConstraints" type="checkbox" checked> Show constraints</label>
+    </div>
+
+    <div class="section">
+      <h3>IK helper</h3>
+      <p class="hint">Toggle IK above. When enabled, drag an end-effector (parts with no children) to move the chain. Joint limits are respected.</p>
+      <div style="margin-top:8px">
+        <button id="solveIKOnce" class="small">Solve IK for selected end effector</button>
+        <button id="resetPose" class="small">Reset Pose</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Notes</h3>
+      <p class="hint">Exported SVG will contain each part as a top-level &lt;g id="part-i"&gt; with transforms applied and each pivot as a top-level &lt;circle id="pivot-i"&gt;. Save/load preserves project state.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================
+   Utilities — matrix math
+   ========================= */
+function matIdentity(){ return {a:1,b:0,c:0,d:1,e:0,f:0}; }
+function matTranslate(tx,ty){ return {a:1,b:0,c:0,d:1,e:tx,f:ty}; }
+function matRotate(rad){ const c=Math.cos(rad), s=Math.sin(rad); return {a:c,b:s,c:-s,d:c,e:0,f:0}; }
+function matMultiply(A,B){
+  return {
+    a: A.a*B.a + A.c*B.b,
+    b: A.b*B.a + A.d*B.b,
+    c: A.a*B.c + A.c*B.d,
+    d: A.b*B.c + A.d*B.d,
+    e: A.a*B.e + A.c*B.f + A.e,
+    f: A.b*B.e + A.d*B.f + A.f
+  };
+}
+function applyMatToPoint(M,x,y){ return { x: M.a*x + M.c*y + M.e, y: M.b*x + M.d*y + M.f }; }
+
+/* =========================
+   DOM refs
+   ========================= */
+const stage = document.getElementById('stage');
+const svgLoader = document.getElementById('svgLoader');
+const partsList = document.getElementById('partsList');
+const selectedInfo = document.getElementById('selectedInfo');
+const parentSelect = document.getElementById('parentSelect');
+const showPivots = document.getElementById('showPivots');
+const showLinks = document.getElementById('showLinks');
+const showConstraints = document.getElementById('showConstraints');
+const ikToggle = document.getElementById('ikToggle');
+
+const autoPivotsBtn = document.getElementById('autoPivots');
+const clearPivotsBtn = document.getElementById('clearPivots');
+const exportSVGbtn = document.getElementById('exportSVG');
+const exportPNGbtn = document.getElementById('exportPNG');
+const saveProjectBtn = document.getElementById('saveProject');
+const loadProjectInput = document.getElementById('loadProject');
+const resetPoseBtn = document.getElementById('resetPose');
+const solveIKOnceBtn = document.getElementById('solveIKOnce');
+const resetTransformsBtn = document.getElementById('resetTransforms');
+const fitViewBtn = document.getElementById('fitView');
+
+const minAngleInput = document.getElementById('minAngle');
+const maxAngleInput = document.getElementById('maxAngle');
+const minAngleLbl = document.getElementById('minAngleLbl');
+const maxAngleLbl = document.getElementById('maxAngleLbl');
+
+/* =========================
+   State
+   ========================= */
+let rawSvgText = null;
+let parts = []; // array of { name, originalEl, group, pivot:{x,y}, rotation (rad), minA, maxA, _extraTx/_extraTy, parentIndex }
+let selectedIndex = null;
+
+/* default preset parent mapping (pre-set hierarchy) — common names */
+const PRESET_PARENTS = { // child: parentName
+  Torso: null,
+  Head: 'Torso',
+  Neck: 'Torso',
+  UpperArmL: 'Torso',
+  LowerArmL: 'UpperArmL',
+  HandL: 'LowerArmL',
+  UpperArmR: 'Torso',
+  LowerArmR: 'UpperArmR',
+  HandR: 'LowerArmR',
+  UpperLegL: 'Torso',
+  LowerLegL: 'UpperLegL',
+  FootL: 'LowerLegL',
+  UpperLegR: 'Torso',
+  LowerLegR: 'UpperLegR',
+  FootR: 'LowerLegR'
+};
+
+/* =========================
+   Load SVG + import parts
+   ========================= */
+svgLoader.addEventListener('change', async (ev)=>{
+  const f = ev.target.files && ev.target.files[0];
+  if(!f) return;
+  const text = await f.text();
+  rawSvgText = text;
+  loadSVGText(text);
+});
+
+function loadSVGText(text){
+  // clear
+  while(stage.firstChild) stage.removeChild(stage.firstChild);
+
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const inSvg = doc.documentElement;
+
+  // copy defs
+  const defs = inSvg.querySelector('defs');
+  if(defs) stage.appendChild(document.importNode(defs, true));
+
+  // copy width/height or viewBox
+  const vb = inSvg.getAttribute('viewBox');
+  if(vb) stage.setAttribute('viewBox', vb);
+  const w = inSvg.getAttribute('width'), h = inSvg.getAttribute('height');
+  if(w && h){ stage.setAttribute('width', w); stage.setAttribute('height', h); }
+
+  // collect top-level children (skip defs)
+  const children = Array.from(inSvg.children).filter(n => n.tagName.toLowerCase() !== 'defs');
+  parts = [];
+
+  children.forEach((child, idx) => {
+    const imported = document.importNode(child, true);
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.classList.add('part-group');
+    const name = imported.id || `${imported.tagName}-${idx}`;
+    g.setAttribute('data-name', name);
+    g.appendChild(imported);
+    stage.appendChild(g);
+
+    // compute default bbox pivot
+    let bbox;
+    try{ bbox = imported.getBBox(); } catch(e){ bbox = {x:0,y:0,width:100,height:100}; }
+    const pivot = { x: bbox.x + bbox.width/2, y: bbox.y + Math.max(8, bbox.height*0.12) };
+
+    const obj = {
+      name, originalEl: imported, group: g,
+      pivot,
+      rotation: 0,
+      minA: -180, maxA: 180, // constraints in degrees
+      _extraTx: 0, _extraTy:0,
+      parentIndex: null
+    };
+    parts.push(obj);
+  });
+
+  // apply preset parents by matching names
+  parts.forEach((p,i)=>{
+    const preset = PRESET_PARENTS[p.name];
+    if(typeof preset === 'string'){
+      const parentIdx = parts.findIndex(q=>q.name === preset);
+      if(parentIdx !== -1) p.parentIndex = parentIdx;
+    }
+  });
+
+  renderAll();
+  fitView();
+  buildPartsList();
+  buildParentSelect();
+}
+
+/* =========================
+   Render functions: pivots, link lines
+   ========================= */
+function renderAll(){
+  // remove existing pivots/lines
+  Array.from(stage.querySelectorAll('.pivot')).forEach(n=>n.remove());
+  Array.from(stage.querySelectorAll('.link-line')).forEach(n=>n.remove());
+  // append groups (already appended) and create pivots
+  parts.forEach((p, idx)=>{
+    // reset transform attr and extra offsets if missing
+    p.group.removeAttribute('transform');
+    // create pivot circle top-level
+    const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    c.classList.add('pivot');
+    c.setAttribute('r', 7);
+    c.setAttribute('cx', p.pivot.x);
+    c.setAttribute('cy', p.pivot.y);
+    c.setAttribute('data-idx', idx);
+    c.style.display = showPivots.checked ? 'inline' : 'none';
+    stage.appendChild(c);
+  });
+  // draw hierarchy link lines (parent -> child pivot)
+  updateLinkLines();
+  attachInteraction();
+  // apply transforms to all parts
+  parts.forEach(updateGroupTransform);
+}
+
+/* update link lines */
+function updateLinkLines(){
+  Array.from(stage.querySelectorAll('.link-line')).forEach(n=>n.remove());
+  if(!showLinks.checked) return;
+  parts.forEach((p,idx)=>{
+    if(p.parentIndex == null) return;
+    const parent = parts[p.parentIndex];
+    // draw line between parent.pivot and p.pivot
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.classList.add('link-line');
+    line.setAttribute('x1', parent.pivot.x);
+    line.setAttribute('y1', parent.pivot.y);
+    line.setAttribute('x2', p.pivot.x);
+    line.setAttribute('y2', p.pivot.y);
+    stage.appendChild(line);
+  });
+}
+
+/* =========================
+   Interaction: pointers for pivots and parts
+   ========================= */
+function attachInteraction(){
+  // pivot pointer handlers
+  Array.from(stage.querySelectorAll('.pivot')).forEach(c=>{
+    c.onpointerdown = pivotPointerDown;
+  });
+  // group pointer down for rotation or IK drag (we'll use pointerdown on groups)
+  Array.from(stage.querySelectorAll('.part-group')).forEach(g=>{
+    g.onpointerdown = partPointerDown;
+  });
+  window.onpointermove = globalPointerMove;
+  window.onpointerup = globalPointerUp;
+}
+
+/* map screen px to SVG coords */
+function svgPointFromEvent(evt){
+  const pt = stage.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  const ctm = stage.getScreenCTM();
+  if(!ctm) return { x:evt.clientX, y:evt.clientY };
+  const inv = ctm.inverse();
+  const p = pt.matrixTransform(inv);
+  return { x: p.x, y: p.y };
+}
+
+/* interaction state */
+let draggingPivot = null; // {idx, circle, worldRef}
+let rotatingPart = null;  // {idx, startAngle, startMouseAngle}
+let draggingForIK = null; // {idx} when IK dragging an end effector
+let isDragging = false;
+
+/* pivotPointerDown: begin pivot move (preserve visual placement) */
+function pivotPointerDown(evt){
+  evt.stopPropagation(); evt.preventDefault();
+  const circle = evt.currentTarget;
+  const idx = parseInt(circle.getAttribute('data-idx'),10);
+  const part = parts[idx];
+  const worldRef = getGroupWorldPoint(part, 0, 0); // a reference local point (origin) world pos prior move
+  draggingPivot = { idx, circle, worldRef };
+  circle.setPointerCapture(evt.pointerId);
+  isDragging = true;
+}
+
+/* partPointerDown: rotate if mouse moves; if IK toggle and it's an end-effector, start IK drag */
+function partPointerDown(evt){
+  evt.stopPropagation(); evt.preventDefault();
+  const g = evt.currentTarget;
+  const idx = parts.findIndex(p=>p.group === g);
+  if(idx === -1) return;
+  selectedIndex = idx; updateSelectedUI();
+  const pos = svgPointFromEvent(evt);
+  const part = parts[idx];
+  // if IK on and this is an end-effector (no children) → start IK drag
+  const hasChildren = parts.some((q)=> q.parentIndex === idx);
+  if(ikToggle.checked && !hasChildren){
+    draggingForIK = { idx, start: pos };
+    isDragging = true;
+    g.setPointerCapture(evt.pointerId);
+    return;
+  }
+  // else start rotation
+  const pivot = part.pivot;
+  const startMouseAngle = Math.atan2(pos.y - pivot.y, pos.x - pivot.x);
+  rotatingPart = { idx, startAngle: part.rotation || 0, startMouseAngle };
+  isDragging = true;
+  g.setPointerCapture(evt.pointerId);
+}
+
+/* pointer move: handle pivot move, rotate, IK */
+function globalPointerMove(evt){
+  if(!isDragging) return;
+  const pos = svgPointFromEvent(evt);
+
+  if(draggingPivot){
+    const { idx, circle, worldRef } = draggingPivot;
+    const part = parts[idx];
+    const newPivot = { x: pos.x, y: pos.y };
+    // set pivot then compute where local origin maps to world; translate so visual position unchanged
+    part.pivot.x = newPivot.x; part.pivot.y = newPivot.y;
+    const Mnew = computeGroupMatrix(part);
+    const newWorldRef = applyMatToPoint(Mnew, 0, 0);
+    const dx = worldRef.x - newWorldRef.x;
+    const dy = worldRef.y - newWorldRef.y;
+    part._extraTx = (part._extraTx || 0) + dx;
+    part._extraTy = (part._extraTy || 0) + dy;
+    // update visuals
+    circle.setAttribute('cx', part.pivot.x); circle.setAttribute('cy', part.pivot.y);
+    updateGroupTransform(part);
+    // update children transforms and link lines
+    parts.forEach(updateGroupTransform);
+    updateLinkLines();
+    updateSelectedUI();
+    return;
+  }
+
+  if(rotatingPart){
+    const { idx, startAngle, startMouseAngle } = rotatingPart;
+    const part = parts[idx];
+    const curMouseAngle = Math.atan2(pos.y - part.pivot.y, pos.x - part.pivot.x);
+    const delta = curMouseAngle - startMouseAngle;
+    let newAngle = startAngle + delta;
+    // apply constraints
+    newAngle = clampAngleDegRad(newAngle, part.minA, part.maxA);
+    part.rotation = newAngle;
+    // update transforms of this and descendants
+    updateGroupTransform(part);
+    parts.forEach(updateGroupTransform);
+    updateLinkLines();
+    updateSelectedUI();
+    return;
+  }
+
+  if(draggingForIK){
+    const { idx } = draggingForIK;
+    const endIdx = idx;
+    // run CCD IK on chain from end -> root (use parentIndex) giving target pos
+    const target = { x: pos.x, y: pos.y };
+    runCCD(endIdx, target, 20, 0.5);
+    // update visuals
+    parts.forEach(updateGroupTransform);
+    updateLinkLines();
+    updateSelectedUI();
+    return;
+  }
+}
+
+/* pointer up */
+function globalPointerUp(evt){
+  if(draggingPivot){
+    try{ draggingPivot.circle.releasePointerCapture(evt.pointerId); }catch(e){}
+    draggingPivot = null;
+  }
+  if(rotatingPart){
+    try{ parts[rotatingPart.idx].group.releasePointerCapture(evt.pointerId); }catch(e){}
+    rotatingPart = null;
+  }
+  if(draggingForIK){
+    try{ parts[draggingForIK.idx].group.releasePointerCapture(evt.pointerId); }catch(e){}
+    draggingForIK = null;
+  }
+  isDragging = false;
+}
+
+/* =========================
+   Compute group/world transforms (with hierarchy)
+   local: T(pivot) * R(rotation) * T(-pivot) * T(extra)
+   world = parentWorld * local
+   ========================= */
+function computeGroupMatrix(part){
+  const T1 = matTranslate(part.pivot.x, part.pivot.y);
+  const R = matRotate(part.rotation || 0);
+  const T2 = matTranslate(-part.pivot.x, -part.pivot.y);
+  const Extra = matTranslate(part._extraTx || 0, part._extraTy || 0);
+  const local = matMultiply(T1, matMultiply(R, matMultiply(T2, Extra)));
+  if(part.parentIndex != null && parts[part.parentIndex]){
+    const parentM = computeGroupMatrix(parts[part.parentIndex]);
+    return matMultiply(parentM, local);
+  }
+  return local;
+}
+
+/* apply matrix to group's transform attr & update pivot circle */
+function updateGroupTransform(part){
+  const M = computeGroupMatrix(part);
+  part.group.setAttribute('transform', `matrix(${M.a} ${M.b} ${M.c} ${M.d} ${M.e} ${M.f})`);
+  const idx = parts.indexOf(part);
+  const circle = stage.querySelector(`.pivot[data-idx="${idx}"]`);
+  if(circle){
+    circle.setAttribute('cx', part.pivot.x);
+    circle.setAttribute('cy', part.pivot.y);
+    circle.style.display = showPivots.checked ? 'inline' : 'none';
+  }
+}
+
+/* get world point of local coords for a part */
+function getGroupWorldPoint(part, lx, ly){
+  const M = computeGroupMatrix(part);
+  return applyMatToPoint(M, lx, ly);
+}
+
+/* clamp angle to min/max (degrees stored, rotations in radians) */
+function clampAngleDegRad(rad, minDeg, maxDeg){
+  const deg = rad * 180 / Math.PI;
+  const clamped = Math.max(minDeg, Math.min(maxDeg, deg));
+  return clamped * Math.PI / 180;
+}
+
+/* =========================
+   CCD IK solver (simple)
+   - endIdx: index of end effector part
+   - target: {x,y} in world coords
+   - iterations: max iterations
+   - stepWeight: fraction of computed delta to apply each iteration
+   - respects joint minA/maxA constraints
+   ========================= */
+function runCCD(endIdx, target, iterations=20, stepWeight=0.8){
+  // Build chain of parts indices from end to root (stop when parent null)
+  const chain = [];
+  let cur = endIdx;
+  while(cur != null){
+    chain.push(cur);
+    cur = parts[cur].parentIndex;
+  }
+  // Early exit if chain length < 1
+  if(chain.length === 0) return false;
+
+  for(let iter=0; iter<iterations; iter++){
+    let reached = false;
+    // iterate along chain from first parent (closest to end) up to root
+    for(let i=0;i<chain.length;i++){
+      const idx = chain[i];
+      const part = parts[idx];
+      // pivot world coords
+      const pivotWorld = part.pivot; // pivot is in world coordinates (top-level), but part.pivot is in canvas coords already
+      // current end effector world position
+      const endPart = parts[endIdx];
+      const endWorld = getGroupWorldPoint(endPart, 0, 0); // world pos of local origin of end part
+      // vector from pivot to end and pivot to target
+      const vEnd = { x: endWorld.x - pivotWorld.x, y: endWorld.y - pivotWorld.y };
+      const vT = { x: target.x - pivotWorld.x, y: target.y - pivotWorld.y };
+      const a1 = Math.atan2(vEnd.y, vEnd.x);
+      const a2 = Math.atan2(vT.y, vT.x);
+      let delta = a2 - a1;
+      // normalize delta to -pi..pi
+      delta = ((delta + Math.PI) % (2*Math.PI)) - Math.PI;
+      // apply step weight
+      const applyDelta = delta * stepWeight;
+      // convert to degrees and clamp with constraints
+      const currentDeg = (part.rotation || 0) * 180 / Math.PI;
+      const newDeg = currentDeg + applyDelta * 180 / Math.PI;
+      const clampedDeg = Math.max(part.minA || -180, Math.min(part.maxA || 180, newDeg));
+      part.rotation = clampedDeg * Math.PI / 180;
+      // update transforms for downstream calculation
+      parts.forEach(updateGroupTransform);
+      // check distance to target
+      const newEndWorld = getGroupWorldPoint(endPart, 0, 0);
+      const dist = Math.hypot(newEndWorld.x - target.x, newEndWorld.y - target.y);
+      if(dist < 1.0) { reached = true; break; }
+    }
+    if(reached) break;
+  }
+  return true;
+}
+
+/* =========================
+   Build parts list & UI controls
+   ========================= */
+function buildPartsList(){
+  partsList.innerHTML = '';
+  if(parts.length === 0){ partsList.textContent = 'No parts loaded'; return; }
+  parts.forEach((p,i)=>{
+    const row = document.createElement('div'); row.className='part-row';
+    const childCount = parts.filter(q=>q.parentIndex===i).length;
+    row.innerHTML = `<div style="min-width:180px"><strong>${p.name}</strong><div class="muted">${p.originalEl.tagName} · children:${childCount}</div></div>
+      <div><button data-i="${i}" class="small selectBtn">Select</button></div>`;
+    partsList.appendChild(row);
+    row.querySelector('button').onclick = ()=>{
+      selectedIndex = parseInt(row.querySelector('button').getAttribute('data-i'),10);
+      updateSelectedUI();
+    };
+  });
+}
+
+/* build parentSelect options */
+function buildParentSelect(){
+  parentSelect.innerHTML = '<option value="">(none)</option>';
+  parts.forEach((p, i)=>{
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = p.name;
+    parentSelect.appendChild(opt);
+  });
+  parentSelect.onchange = ()=>{
+    if(selectedIndex === null) return;
+    const v = parentSelect.value;
+    if(v === '') parts[selectedIndex].parentIndex = null;
+    else {
+      const idx = parseInt(v,10);
+      if(idx === selectedIndex){ alert('Cannot parent to self'); parentSelect.value = ''; return; }
+      if(isDescendant(idx, selectedIndex)){ alert('Cannot parent to descendant (cycle)'); parentSelect.value=''; return; }
+      parts[selectedIndex].parentIndex = idx;
+    }
+    // refresh transforms
+    parts.forEach(updateGroupTransform);
+    updateLinkLines();
+    buildPartsList();
+  };
+}
+
+/* check descendant to prevent cycles */
+function isDescendant(candidateIndex, nodeIndex){
+  let node = parts[candidateIndex];
+  while(node){
+    if(node.parentIndex == null) return false;
+    if(node.parentIndex === nodeIndex) return true;
+    node = parts[node.parentIndex];
+  }
+  return false;
+}
+
+/* update selected UI (info + constraint sliders) */
+function updateSelectedUI(){
+  if(selectedIndex == null || !parts[selectedIndex]){ selectedInfo.textContent='No selection'; parentSelect.value=''; return; }
+  const p = parts[selectedIndex];
+  selectedInfo.innerHTML = `<strong>${p.name}</strong>
+    <div class="muted">pivot: ${p.pivot.x.toFixed(1)}, ${p.pivot.y.toFixed(1)}</div>
+    <div class="muted">rotation: ${((p.rotation||0)*180/Math.PI).toFixed(1)}°</div>`;
+  buildParentSelect();
+  parentSelect.value = p.parentIndex != null ? String(p.parentIndex) : '';
+  minAngleInput.value = p.minA;
+  maxAngleInput.value = p.maxA;
+  minAngleLbl.textContent = `${p.minA}°`;
+  maxAngleLbl.textContent = `${p.maxA}°`;
+}
+
+/* constraint slider events */
+minAngleInput.addEventListener('input', ()=>{
+  if(selectedIndex == null) return;
+  const v = parseInt(minAngleInput.value,10);
+  parts[selectedIndex].minA = v;
+  minAngleLbl.textContent = `${v}°`;
+  // enforce current rotation within constraints
+  parts[selectedIndex].rotation = clampAngleDegRad(parts[selectedIndex].rotation || 0, parts[selectedIndex].minA, parts[selectedIndex].maxA);
+  updateGroupTransform(parts[selectedIndex]);
+});
+maxAngleInput.addEventListener('input', ()=>{
+  if(selectedIndex == null) return;
+  const v = parseInt(maxAngleInput.value,10);
+  parts[selectedIndex].maxA = v;
+  maxAngleLbl.textContent = `${v}°`;
+  parts[selectedIndex].rotation = clampAngleDegRad(parts[selectedIndex].rotation || 0, parts[selectedIndex].minA, parts[selectedIndex].maxA);
+  updateGroupTransform(parts[selectedIndex]);
+});
+
+/* =========================
+   Actions & helpers (auto pivots, clear, save/load, export)
+   ========================= */
+autoPivotsBtn.addEventListener('click', ()=>{
+  parts.forEach(p=>{
+    try{
+      const bbox = p.originalEl.getBBox();
+      p.pivot.x = bbox.x + bbox.width/2; p.pivot.y = bbox.y + Math.max(8,bbox.height*0.12);
+    }catch(e){}
+  });
+  renderAll();
+  parts.forEach(updateGroupTransform);
+  updateLinkLines();
+  buildPartsList();
+});
+
+clearPivotsBtn.addEventListener('click', ()=>{
+  Array.from(stage.querySelectorAll('.pivot')).forEach(n=>n.remove());
+  parts.forEach(p=>{ p.pivot = {x:0,y:0}; p._extraTx=0; p._extraTy=0; p.rotation=0; p.parentIndex=null; p.group.removeAttribute('transform'); });
+  renderAll();
+  buildPartsList();
+});
+
+resetTransformsBtn.addEventListener('click', ()=>{
+  parts.forEach(p=>{ p.rotation=0; p._extraTx=0; p._extraTy=0; updateGroupTransform(p); });
+  updateLinkLines();
+  updateSelectedUI();
+});
+
+/* fit view */
+fitViewBtn.addEventListener('click', fitView);
+function fitView(){
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  parts.forEach(p=>{
+    try{
+      const b = p.originalEl.getBBox();
+      minX = Math.min(minX,b.x); minY = Math.min(minY,b.y);
+      maxX = Math.max(maxX,b.x + b.width); maxY = Math.max(maxY,b.y + b.height);
+    }catch(e){}
+  });
+  if(!isFinite(minX)) return;
+  const pad = Math.max(20,(maxX-minX)*0.05);
+  stage.setAttribute('viewBox', `${minX-pad} ${minY-pad} ${ (maxX-minX) + pad*2 } ${ (maxY-minY) + pad*2 }`);
+}
+
+/* Show/hide toggles */
+showPivots.addEventListener('change', ()=> {
+  Array.from(stage.querySelectorAll('.pivot')).forEach(c=> c.style.display = showPivots.checked ? 'inline' : 'none');
+});
+showLinks.addEventListener('change', ()=> updateLinkLines());
+
+/* Save project JSON */
+saveProjectBtn.addEventListener('click', ()=>{
+  if(parts.length===0){ alert('No project to save'); return; }
+  const data = {
+    svgText: rawSvgText,
+    parts: parts.map(p=>({
+      name:p.name,
+      pivot:p.pivot,
+      rotation:p.rotation,
+      minA:p.minA,
+      maxA:p.maxA,
+      parentIndex:p.parentIndex,
+      extraTx:p._extraTx, extraTy:p._extraTy
+    })),
+    viewBox: stage.getAttribute('viewBox'),
+    width: stage.getAttribute('width'), height: stage.getAttribute('height')
+  };
+  const blob = new Blob([JSON.stringify(data)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'project.json'; a.click(); URL.revokeObjectURL(url);
+});
+
+/* Load project JSON */
+loadProjectInput.addEventListener('change', async (ev)=>{
+  const f = ev.target.files && ev.target.files[0];
+  if(!f) return;
+  const txt = await f.text();
+  try{
+    const obj = JSON.parse(txt);
+    // reload svg if present
+    if(obj.svgText) rawSvgText = obj.svgText;
+    if(rawSvgText) loadSVGText(rawSvgText);
+    // after load we may need to apply saved part state
+    if(obj.parts && parts.length === obj.parts.length){
+      obj.parts.forEach((ps, i)=>{
+        parts[i].pivot = ps.pivot || parts[i].pivot;
+        parts[i].rotation = ps.rotation || 0;
+        parts[i].minA = ps.minA != null ? ps.minA : parts[i].minA;
+        parts[i].maxA = ps.maxA != null ? ps.maxA : parts[i].maxA;
+        parts[i].parentIndex = (ps.parentIndex != null) ? ps.parentIndex : parts[i].parentIndex;
+        parts[i]._extraTx = ps.extraTx || 0; parts[i]._extraTy = ps.extraTy || 0;
+      });
+      renderAll();
+      parts.forEach(updateGroupTransform);
+      updateLinkLines();
+      buildPartsList();
+    }
+    if(obj.viewBox) stage.setAttribute('viewBox', obj.viewBox);
+  } catch(e){
+    alert('Invalid project JSON.');
+  }
+});
+
+/* Reset pose */
+resetPoseBtn.addEventListener('click', ()=>{
+  parts.forEach(p=>{ p.rotation=0; p._extraTx=0; p._extraTy=0; updateGroupTransform(p); });
+  updateLinkLines();
+});
+
+/* Solve IK once for selected end effector */
+solveIKOnceBtn.addEventListener('click', ()=>{
+  if(selectedIndex == null) { alert('Select an end-effector part (hand/foot) first'); return; }
+  const hasChildren = parts.some(q=> q.parentIndex === selectedIndex);
+  if(hasChildren) { alert('Selected part is not an end-effector (it has children)'); return; }
+  // pick a target near current pivot for test (shift right a bit)
+  const pt = { x: parts[selectedIndex].pivot.x + 60, y: parts[selectedIndex].pivot.y + 0 };
+  runCCD(selectedIndex, pt, 30, 0.8);
+  parts.forEach(updateGroupTransform);
+  updateLinkLines();
+});
+
+/* =========================
+   Export functions
+   ========================= */
+exportSVGbtn.addEventListener('click', ()=>{
+  if(parts.length===0){ alert('No parts'); return; }
+  const defs = stage.querySelector('defs');
+  const defsStr = defs ? defs.outerHTML : '';
+  const vb = stage.getAttribute('viewBox') || '';
+  const width = stage.getAttribute('width') || '';
+  const height = stage.getAttribute('height') || '';
+  const partEls = parts.map((p, idx)=>{
+    const cloned = p.originalEl.cloneNode(true);
+    const M = computeGroupMatrix(p);
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('id', `part-${idx}`);
+    g.setAttribute('transform', `matrix(${M.a} ${M.b} ${M.c} ${M.d} ${M.e} ${M.f})`);
+    g.appendChild(cloned);
+    return g.outerHTML;
+  }).join('\n');
+  const pivotEls = parts.map((p, idx)=> `<circle id="pivot-${idx}" cx="${p.pivot.x}" cy="${p.pivot.y}" r="6" fill="orange" stroke="#000" stroke-width="1"><title>${p.name} pivot</title></circle>`).join('\n');
+  const open = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ${vb?`viewBox="${vb}"`:(width && height?`width="${width}" height="${height}"`:'')}>`;
+  const svgStr = `${open}\n${defsStr}\n${partEls}\n${pivotEls}\n</svg>`;
+  const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'posed_hierarchical.svg'; a.click(); URL.revokeObjectURL(url);
+});
+
+exportPNGbtn.addEventListener('click', ()=>{
+  if(parts.length===0){ alert('No parts'); return; }
+  const vb = stage.getAttribute('viewBox');
+  const w = stage.getAttribute('width') || 1200;
+  const h = stage.getAttribute('height') || 1200;
+  const defs = stage.querySelector('defs');
+  const defsStr = defs ? defs.outerHTML : '';
+  const partEls = parts.map(p=>{
+    const cloned = p.originalEl.cloneNode(true);
+    const M = computeGroupMatrix(p);
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('transform', `matrix(${M.a} ${M.b} ${M.c} ${M.d} ${M.e} ${M.f})`);
+    g.appendChild(cloned);
+    return g.outerHTML;
+  }).join('\n');
+  const pivotEls = parts.map(p=>`<circle cx="${p.pivot.x}" cy="${p.pivot.y}" r="6" fill="orange" stroke="#000" stroke-width="1" />`).join('\n');
+  const open = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ${vb?`viewBox="${vb}" width="${w}" height="${h}"`:`width="${w}" height="${h}"`}>`;
+  const svgString = `${open}\n${defsStr}\n${partEls}\n${pivotEls}\n</svg>`;
+  const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = ()=>{
+    const canv = document.createElement('canvas'); canv.width = +w; canv.height = +h;
+    const g = canv.getContext('2d'); g.clearRect(0,0,canv.width,canv.height);
+    g.drawImage(img, 0,0);
+    URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = canv.toDataURL('image/png'); a.download='posed_hierarchical.png'; a.click();
+  };
+  img.onerror = ()=>{ URL.revokeObjectURL(url); alert('Rasterize failed'); };
+  img.src = url;
+});
+
+/* =========================
+   Init UI & helpers
+   ========================= */
+function updateUIAfterLoad(){
+  renderAll();
+  buildPartsList();
+  buildParentSelect();
+  updateLinkLines();
+  parts.forEach(updateGroupTransform);
+}
+function updateLinkLines(){ // re-draw lines
+  Array.from(stage.querySelectorAll('.link-line')).forEach(n=>n.remove());
+  if(!showLinks.checked) return;
+  parts.forEach((p,idx)=>{
+    if(p.parentIndex == null) return;
+    const parent = parts[p.parentIndex];
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.classList.add('link-line');
+    line.setAttribute('x1', parent.pivot.x);
+    line.setAttribute('y1', parent.pivot.y);
+    line.setAttribute('x2', p.pivot.x);
+    line.setAttribute('y2', p.pivot.y);
+    stage.appendChild(line);
+  });
+}
+
+/* finalize: expose update functions when needed */
+window.addEventListener('resize', ()=>{ /* no-op */ });
+
+</script>
+</body>
+</html>
