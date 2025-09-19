@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Image Body Part Cutter — PNG & SVG Export</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { margin:0; display:flex; flex-direction:column; align-items:center; font-family:Inter,Arial, sans-serif; }
+    #controls { margin:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    canvas { border:1px solid #ccc; cursor:crosshair; background: #fff; }
+    button { padding:8px 10px; border-radius:6px; border:1px solid #bbb; background:#f6f6f6; cursor:pointer; }
+    button.primary { background:#2563eb; color:white; border-color:#1e40af; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label><input id="imageLoader" type="file" accept="image/*"> upload image</label>
+    <button id="toggleMode">Switch to Body Part Mode</button>
+    <button id="exportPNG" class="primary">Export Body Parts (PNG)</button>
+    <button id="exportSVG">Export Body Parts (SVG)</button>
+    <label>Canvas size:
+      <select id="canvasSize">
+        <option value="1200">1200×1200</option>
+        <option value="1600">1600×1600</option>
+        <option value="2000">2000×2000</option>
+      </select>
+    </label>
+  </div>
+
+  <canvas id="canvas" width="1200" height="1200" style="width:80vw; height:80vh; max-width:1600px; max-height:1600px;"></canvas>
+
+<script>
+/* ====== State ====== */
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const imageLoader = document.getElementById('imageLoader');
+const toggleModeBtn = document.getElementById('toggleMode');
+const exportPngBtn = document.getElementById('exportPNG');
+const exportSvgBtn = document.getElementById('exportSVG');
+const canvasSizeSelect = document.getElementById('canvasSize');
+
+let img = null;             // Image object (uploaded)
+let mode = 'cut';           // 'cut' or 'body'
+let dragging = null;        // currently dragging part
+let resizing = null;        // currently resizing part
+let handleName = null;      // which corner handle is active
+let dragOffsetX = 0, dragOffsetY = 0;
+const HANDLE = 10;
+
+/* ====== Body parts initial layout on a larger canvas ====== */
+let bodyParts = [
+  { label: "Head", type: "ellipse", x: 500, y: 50, width: 120, height: 150 },
+  { label: "Neck", type: "rect", x: 540, y: 210, width: 60, height: 40 },
+  { label: "Torso", type: "ellipse", x: 450, y: 250, width: 200, height: 250 },
+  { label: "UpperArmLeft", type: "rect", x: 380, y: 270, width: 60, height: 130 },
+  { label: "LowerArmLeft", type: "rect", x: 380, y: 410, width: 60, height: 130 },
+  { label: "HandLeft", type: "rect", x: 380, y: 550, width: 60, height: 60 },
+  { label: "UpperArmRight", type: "rect", x: 660, y: 270, width: 60, height: 130 },
+  { label: "LowerArmRight", type: "rect", x: 660, y: 410, width: 60, height: 130 },
+  { label: "HandRight", type: "rect", x: 660, y: 550, width: 60, height: 60 },
+  { label: "UpperLegLeft", type: "rect", x: 500, y: 510, width: 70, height: 150 },
+  { label: "LowerLegLeft", type: "rect", x: 500, y: 670, width: 70, height: 150 },
+  { label: "FootLeft", type: "rect", x: 500, y: 830, width: 70, height: 40 },
+  { label: "UpperLegRight", type: "rect", x: 580, y: 510, width: 70, height: 150 },
+  { label: "LowerLegRight", type: "rect", x: 580, y: 670, width: 70, height: 150 },
+  { label: "FootRight", type: "rect", x: 580, y: 830, width: 70, height: 40 }
+];
+
+/* ====== Helpers: drawing, hit tests ====== */
+function clearCanvas() { ctx.clearRect(0,0,canvas.width,canvas.height); }
+
+function draw() {
+  clearCanvas();
+  // draw background image full-size at 0,0 (canvas is larger workspace)
+  if (img) ctx.drawImage(img, 0, 0, img.width, img.height);
+
+  if (mode === 'body') {
+    // draw each part: outline + translucent fill + label + handles
+    bodyParts.forEach(p => {
+      ctx.save();
+      ctx.beginPath();
+      if (p.type === 'ellipse') {
+        ctx.ellipse(p.x + p.width/2, p.y + p.height/2, p.width/2, p.height/2, 0, 0, Math.PI*2);
+      } else {
+        ctx.rect(p.x, p.y, p.width, p.height);
+      }
+      ctx.strokeStyle = '#e11d48'; // red
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.clip();
+      // translucent fill indicates the region
+      ctx.fillStyle = 'rgba(225,29,72,0.12)';
+      ctx.fill();
+      ctx.restore();
+
+      // label centered
+      ctx.save();
+      ctx.fillStyle = 'black';
+      let fontSize = Math.max(10, Math.min(18, Math.floor(Math.min(p.width, p.height) / 6)));
+      ctx.font = `${fontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.label, p.x + p.width/2, p.y + p.height/2);
+      ctx.restore();
+
+      // draw corner handles for resize
+      drawHandlesForPart(p);
+    });
+  }
+}
+
+function drawHandlesForPart(p) {
+  const hs = getHandles(p);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  hs.forEach(h=>{
+    ctx.fillRect(h.x - HANDLE/2, h.y - HANDLE/2, HANDLE, HANDLE);
+    ctx.strokeRect(h.x - HANDLE/2, h.y - HANDLE/2, HANDLE, HANDLE);
+  });
+}
+
+function getHandles(p) {
+  return [
+    { name:'tl', x: p.x, y: p.y },
+    { name:'tr', x: p.x + p.width, y: p.y },
+    { name:'bl', x: p.x, y: p.y + p.height },
+    { name:'br', x: p.x + p.width, y: p.y + p.height }
+  ];
+}
+
+function pointInEllipse(px,py,p){
+  const cx = p.x + p.width/2, cy = p.y + p.height/2;
+  const rx = p.width/2, ry = p.height/2;
+  const dx = px - cx, dy = py - cy;
+  return ((dx*dx)/(rx*rx) + (dy*dy)/(ry*ry)) <= 1;
+}
+
+function isPointInPart(x,y,p) {
+  if (p.type === 'ellipse') return pointInEllipse(x,y,p);
+  return x >= p.x && x <= p.x + p.width && y >= p.y && y <= p.y + p.height;
+}
+
+/* ====== Hit testing for handles/move ====== */
+function hitTest(x,y) {
+  // check handles first (top-most parts last in array => iterate reverse)
+  for (let i = bodyParts.length - 1; i >= 0; i--) {
+    const p = bodyParts[i];
+    const hs = getHandles(p);
+    for (const h of hs) {
+      if (x >= h.x - HANDLE/2 && x <= h.x + HANDLE/2 && y >= h.y - HANDLE/2 && y <= h.y + HANDLE/2) {
+        return { part: p, type: 'handle', handle: h.name };
+      }
+    }
+    if (isPointInPart(x,y,p)) return { part: p, type: 'move' };
+  }
+  return null;
+}
+
+/* ====== Interaction ====== */
+canvas.addEventListener('mousedown', (e) => {
+  if (mode !== 'body') return;
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+  const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+  const hit = hitTest(x,y);
+  if (!hit) return;
+  if (hit.type === 'handle') {
+    resizing = hit.part;
+    handleName = hit.handle;
+  } else if (hit.type === 'move') {
+    dragging = hit.part;
+    dragOffsetX = x - dragging.x;
+    dragOffsetY = y - dragging.y;
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  if (mode !== 'body') return;
+  if (!dragging && !resizing) {
+    // update cursor based on hover
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+    const h = hitTest(x,y);
+    if (!h) canvas.style.cursor = 'crosshair';
+    else canvas.style.cursor = (h.type === 'handle') ? 'nwse-resize' : 'move';
+    return;
+  }
+
+  // perform drag or resize
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+  const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+  if (dragging) {
+    dragging.x = x - dragOffsetX;
+    dragging.y = y - dragOffsetY;
+    draw();
+  } else if (resizing) {
+    resizePart(resizing, handleName, x, y);
+    draw();
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  dragging = null; resizing = null; handleName = null;
+});
+
+/* ====== Resize logic for corner handles ====== */
+function resizePart(part, handle, px, py) {
+  // constrain minimum size
+  const MIN = 8;
+  switch (handle) {
+    case 'tl': {
+      const newW = part.width + (part.x - px);
+      const newH = part.height + (part.y - py);
+      if (newW > MIN) { part.x = px; part.width = newW; }
+      if (newH > MIN) { part.y = py; part.height = newH; }
+      break;
+    }
+    case 'tr': {
+      const newW = px - part.x;
+      const newH = part.height + (part.y - py);
+      if (newW > MIN) { part.width = newW; }
+      if (newH > MIN) { part.y = py; part.height = newH; }
+      break;
+    }
+    case 'bl': {
+      const newW = part.width + (part.x - px);
+      const newH = py - part.y;
+      if (newW > MIN) { part.x = px; part.width = newW; }
+      if (newH > MIN) { part.height = newH; }
+      break;
+    }
+    case 'br': {
+      const newW = px - part.x;
+      const newH = py - part.y;
+      if (newW > MIN) part.width = newW;
+      if (newH > MIN) part.height = newH;
+      break;
+    }
+  }
+}
+
+/* ====== Export PNG (unchanged) ====== */
+function exportBodyPartsPNG() {
+  if (!img) { alert('Please upload an image first.'); return; }
+  bodyParts.forEach(part => {
+    if (part.width <= 0 || part.height <= 0) return;
+    const temp = document.createElement('canvas');
+    temp.width = Math.round(part.width);
+    temp.height = Math.round(part.height);
+    const tctx = temp.getContext('2d');
+
+    // clipping shape
+    tctx.save();
+    tctx.beginPath();
+    if (part.type === 'ellipse') {
+      tctx.ellipse(part.width/2, part.height/2, part.width/2, part.height/2, 0, 0, Math.PI*2);
+    } else {
+      tctx.rect(0,0,part.width,part.height);
+    }
+    tctx.clip();
+
+    // draw image portion (source coords set to part rect on canvas)
+    // Since the image is drawn at 0,0 of canvas (no pan/scale), we take source = (part.x, part.y, w, h)
+    tctx.drawImage(img,
+      Math.round(part.x), Math.round(part.y), Math.round(part.width), Math.round(part.height),
+      0,0, Math.round(part.width), Math.round(part.height)
+    );
+
+    tctx.restore();
+
+    // optionally: draw label inside (commented out because user requested transparent PNGs)
+    // tctx.fillStyle = 'black'; tctx.font = '14px sans-serif';
+    // tctx.textAlign = 'center'; tctx.textBaseline = 'middle';
+    // tctx.fillText(part.label, part.width/2, part.height/2);
+
+    // download
+    const a = document.createElement('a');
+    a.href = temp.toDataURL('image/png');
+    a.download = `${part.label}.png`;
+    a.click();
+  });
+}
+
+/* ====== Export SVG (single file, multiple elements clipped) ====== */
+function exportBodyPartsSVG() {
+  if (!img) { alert('Please upload an image first.'); return; }
+  // basic validation: ensure parts have positive size
+  const validParts = bodyParts.filter(p => p.width > 0 && p.height > 0);
+  if (validParts.length === 0) { alert('No valid body parts to export.'); return; }
+
+  // SVG root size: match canvas size (workspace)
+  const svgW = canvas.width;
+  const svgH = canvas.height;
+
+  // embed image data URL - ensure image.src is a data URL. If it's an object URL, load it into a canvas to get data URL.
+  const getImageDataURL = () => {
+    return new Promise((resolve) => {
+      // if img.src already starts with data:, good
+      if (typeof img.src === 'string' && img.src.startsWith('data:')) return resolve(img.src);
+
+      // else draw to a temp canvas to get dataURL (works for object URLs as well)
+      const tmp = document.createElement('canvas');
+      tmp.width = img.width;
+      tmp.height = img.height;
+      const t = tmp.getContext('2d');
+      t.drawImage(img,0,0);
+      resolve(tmp.toDataURL('image/png'));
+    });
+  };
+
+  getImageDataURL().then(dataUrl => {
+    // Build SVG
+    // We'll include <defs> with clipPaths, then for each part insert a <g id="part-label"> <clipPath href="#clip-id"> <image .../> </g>
+    let svgParts = [];
+    let defs = ['<defs>'];
+
+    validParts.forEach((p, idx) => {
+      const clipId = `cp${idx}`;
+      // create clip path element (rect or ellipse)
+      if (p.type === 'ellipse') {
+        const cx = p.x + p.width/2;
+        const cy = p.y + p.height/2;
+        const rx = p.width/2;
+        const ry = p.height/2;
+        defs.push(`<clipPath id="${clipId}"><ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" /></clipPath>`);
+      } else {
+        defs.push(`<clipPath id="${clipId}"><rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" /></clipPath>`);
+      }
+    });
+
+    defs.push('</defs>');
+
+    // Embed full image once (we'll reference same data URL for each clipped element)
+    // Note: position image at 0,0 with width img.width and height img.height to match canvas coordinates
+    // For each part we will draw the image with clip-path applied (so it appears clipped)
+    validParts.forEach((p, idx) => {
+      const clipId = `cp${idx}`;
+      // create a <g> so each cutout is its own element; include a title for accessibility and easy selection
+      const safeLabel = escapeXml(p.label);
+      const g = [
+        `<g id="part-${idx}" >`,
+        `<title>${safeLabel}</title>`,
+        // image element: positioned at 0,0 sized to image natural pixel size, clipped to clipPath
+        `<image x="0" y="0" width="${img.width}" height="${img.height}" preserveAspectRatio="xMinYMin slice" xlink:href="${dataUrl}" clip-path="url(#${clipId})" />`,
+        `</g>`
+      ];
+      svgParts.push(g.join(''));
+    });
+
+    // Optionally add outlines/labels inside the SVG for visual reference (not required)
+    const labels = validParts.map((p, idx) => {
+      // label in the center of the part
+      const lx = p.x + p.width/2;
+      const ly = p.y + p.height/2;
+      return `<text x="${lx}" y="${ly}" font-size="${Math.max(10, Math.min(18, Math.floor(Math.min(p.width,p.height)/6)))}" text-anchor="middle" alignment-baseline="middle" fill="black">${escapeXml(p.label)}</text>`;
+    });
+
+    // Build final svg string
+    const svgOpen = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">`;
+    const svgClose = '</svg>';
+
+    const svgString = [
+      svgOpen,
+      defs.join(''),
+      // optionally draw the plain image as backdrop (comment out if you only want clipped elements)
+      // `<image x="0" y="0" width="${img.width}" height="${img.height}" xlink:href="${dataUrl}" />`,
+      svgParts.join(''),
+      // labels (optional, could be omitted if you want pure cutouts)
+      labels.join(''),
+      svgClose
+    ].join('\n');
+
+    // download
+    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'body_parts.svg';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+}
+
+/* ====== Utility ====== */
+function escapeXml(unsafe) {
+  return unsafe.replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','\'':'&apos;','"':'&quot;'}[c]));
+}
+
+/* ====== UI wiring ====== */
+imageLoader.addEventListener('change', (ev) => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    img = new Image();
+    img.onload = function() {
+      // optional: if uploaded image smaller than canvas, center or leave top-left; we keep top-left at 0,0
+      draw();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+toggleModeBtn.addEventListener('click', () => {
+  mode = (mode === 'body') ? 'cut' : 'body';
+  toggleModeBtn.textContent = (mode === 'body') ? 'Switch to Cut Mode' : 'Switch to Body Part Mode';
+  draw();
+});
+
+exportPngBtn.addEventListener('click', exportBodyPartsPNG);
+exportSvgBtn.addEventListener('click', exportBodyPartsSVG);
+
+canvasSizeSelect.addEventListener('change', () => {
+  const size = parseInt(canvasSizeSelect.value, 10) || 1200;
+  canvas.width = canvas.height = size;
+  // scale visual CSS size too (keeps viewport reasonable)
+  canvas.style.width = Math.min(90, Math.round(size/14)) + 'vw';
+  canvas.style.height = canvas.style.width;
+  draw();
+});
+
+/* initialize */
+canvas.width = canvas.height = 1200;
+draw();
+
+</script>
+</body>
+</html>
