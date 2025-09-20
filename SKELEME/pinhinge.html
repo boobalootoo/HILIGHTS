@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pin-to-Board — accurate hinge rotation</title>
+<style>
+  :root { --toolbar-h:56px; }
+  body { margin:0; font-family:system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial; background:#f3f4f6; }
+  #toolbar {
+    position:fixed; left:0; right:0; top:0; height:var(--toolbar-h);
+    background:#222; color:#fff; display:flex; align-items:center; gap:12px;
+    padding:8px 12px; z-index:20;
+  }
+  #pinTool {
+    width:30px; height:30px; border-radius:50%; background:#ff4d6d;
+    display:inline-block; box-shadow:0 1px 0 rgba(0,0,0,0.2); cursor:grab;
+  }
+  #pinTool[aria-grabbing="true"] { cursor:grabbing; transform:scale(.98); }
+  #canvasWrap { position:fixed; left:0; right:0; top:var(--toolbar-h); bottom:0; }
+  canvas { display:block; width:100%; height:100%; background:#fff; }
+  #hint { color:#ddd; font-size:13px; margin-left:6px; }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <label style="display:flex;align-items:center;gap:8px">
+      <span style="font-weight:600">Upload</span>
+      <input id="file" type="file" accept="image/*" multiple>
+    </label>
+
+    <div id="pinTool" draggable="true" title="Drag this pin onto an overlapping region"></div>
+    <div id="hint">Drag the pin from the toolbar onto an overlapping area of two images to hinge them. Drag an image to move (unhinged) or click/drag to rotate around its pin (if pinned).</div>
+  </div>
+
+  <div id="canvasWrap">
+    <canvas id="c"></canvas>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const fileInput = document.getElementById('file');
+  const pinTool = document.getElementById('pinTool');
+
+  let DPR = Math.max(1, window.devicePixelRatio || 1);
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(rect.width * DPR);
+    canvas.height = Math.floor(rect.height * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    draw();
+  }
+  // put canvas sized to container
+  const wrap = document.getElementById('canvasWrap');
+  function setCanvasSizeToWrap() {
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+  }
+  setCanvasSizeToWrap();
+  window.addEventListener('resize', () => { resize(); });
+
+  // Model: images and pins
+  const images = []; // {img, x,y (center), w,h, angle (rad), pins: []}
+  const pins = [];   // {x,y, images:[imgObj1,imgObj2] }
+
+  // helper math
+  const cos = Math.cos, sin = Math.sin;
+  function rotateVec([x,y], a) {
+    return [x * cos(a) - y * sin(a), x * sin(a) + y * cos(a)];
+  }
+
+  // get corners of rotated rectangle (in canvas coords)
+  function rectCorners(imgObj) {
+    const w = imgObj.w, h = imgObj.h;
+    const hx = w/2, hy = h/2;
+    // local coordinates in order (ccw)
+    const local = [
+      [-hx, -hy],
+      [ hx, -hy],
+      [ hx,  hy],
+      [-hx,  hy]
+    ];
+    const out = [];
+    for (const [lx,ly] of local) {
+      const [rx, ry] = rotateVec([lx, ly], imgObj.angle);
+      out.push({x: imgObj.x + rx, y: imgObj.y + ry});
+    }
+    return out;
+  }
+
+  // point in polygon (ray casting)
+  function pointInPoly(px, py, poly) {
+    let inside = false;
+    for (let i=0,j=poly.length-1; i<poly.length; j=i++) {
+      const xi = poly[i].x, yi = poly[i].y;
+      const xj = poly[j].x, yj = poly[j].y;
+      const intersect = ((yi>py) !== (yj>py)) && (px < (xj - xi) * (py - yi) / (yj - yi + 0.0000001) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  // Sutherland–Hodgman polygon clip: clip subject by clipPoly (both arrays of {x,y})
+  function polyClip(subject, clip) {
+    let output = subject.slice();
+    const clipLen = clip.length;
+    if (output.length === 0) return [];
+    // orientation of clip polygon
+    let area = 0;
+    for (let i=0;i<clipLen;i++){
+      const a = clip[i], b = clip[(i+1)%clipLen];
+      area += a.x*b.y - b.x*a.y;
+    }
+    const ccw = area > 0;
+    function isInside(p, a, b) {
+      // return true if p is on the left side of edge a->b when clip is CCW
+      const cross = (b.x - a.x)*(p.y - a.y) - (b.y - a.y)*(p.x - a.x);
+      return ccw ? cross >= -1e-8 : cross <= 1e-8;
+    }
+    function intersect(a, b, c, d) {
+      // line a->b with c->d
+      const A = b.x - a.x, B = b.y - a.y;
+      const C = d.x - c.x, D = d.y - c.y;
+      const denom = A*D - B*C;
+      if (Math.abs(denom) < 1e-9) return null;
+      const t = ((c.x - a.x)*D - (c.y - a.y)*C) / denom;
+      return { x: a.x + t*A, y: a.y + t*B };
+    }
+
+    for (let i=0;i<clipLen;i++) {
+      const a = clip[i];
+      const b = clip[(i+1)%clipLen];
+      const input = output;
+      output = [];
+      if (input.length === 0) break;
+      let S = input[input.length-1];
+      for (const E of input) {
+        if (isInside(E, a, b)) {
+          if (!isInside(S, a, b)) {
+            const ip = intersect(S, E, a, b);
+            if (ip) output.push(ip);
+          }
+          output.push(E);
+        } else if (isInside(S, a, b)) {
+          const ip = intersect(S, E, a, b);
+          if (ip) output.push(ip);
+        }
+        S = E;
+      }
+    }
+    return output;
+  }
+
+  // draw loop
+  function draw() {
+    // clear
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0,0,canvas.width/DPR, canvas.height/DPR);
+
+    // draw images (in order)
+    for (const obj of images) {
+      ctx.save();
+      ctx.translate(obj.x, obj.y);
+      ctx.rotate(obj.angle);
+      ctx.drawImage(obj.img, -obj.w/2, -obj.h/2, obj.w, obj.h);
+      ctx.restore();
+    }
+
+    // draw intersection polygons between each pair
+    ctx.lineWidth = 2;
+    for (let i=0;i<images.length;i++){
+      for (let j=i+1;j<images.length;j++){
+        const A = rectCorners(images[i]);
+        const B = rectCorners(images[j]);
+        const inter = polyClip(A, B);
+        if (inter && inter.length > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(inter[0].x, inter[0].y);
+          for (let k=1;k<inter.length;k++) ctx.lineTo(inter[k].x, inter[k].y);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(255,160,80,0.28)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(200,80,0,0.9)';
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
+
+    // draw pins (on top)
+    for (const p of pins) {
+      ctx.beginPath();
+      ctx.fillStyle = '#ff4d6d';
+      ctx.arc(p.x, p.y, 7, 0, Math.PI*2);
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#330000';
+      ctx.stroke();
+    }
+  }
+
+  // helpers: store displayed size with max dimension
+  function makeImageObject(img) {
+    const maxDim = 260;
+    let scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    return {
+      img,
+      w, h,
+      x: (canvas.width / DPR) / 2 + (Math.random()-0.5)*120,
+      y: (canvas.height / DPR) / 2 + (Math.random()-0.5)*120,
+      angle: 0,
+      pins: [] // list of pin refs attached to this image
+    };
+  }
+
+  // add images from file input
+  fileInput.addEventListener('change', e => {
+    const files = Array.from(e.target.files || []);
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const img = new Image();
+        img.onload = () => {
+          const obj = makeImageObject(img);
+          images.push(obj);
+          // keep drawing order: newly added on top
+          draw();
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+    fileInput.value = '';
+  });
+
+  // drag pin from toolbar
+  pinTool.addEventListener('dragstart', e => {
+    e.dataTransfer.setData('text/pin', '1');
+    pinTool.setAttribute('aria-grabbing', 'true');
+    // set drag image so it's apparent while dragging
+    const dragImg = document.createElement('canvas');
+    dragImg.width = dragImg.height = 40;
+    const dctx = dragImg.getContext('2d');
+    dctx.fillStyle = '#ff4d6d';
+    dctx.beginPath(); dctx.arc(20,20,12,0,Math.PI*2); dctx.fill();
+    dctx.strokeStyle = '#330000'; dctx.stroke();
+    e.dataTransfer.setDragImage(dragImg, 20, 20);
+  });
+  pinTool.addEventListener('dragend', () => pinTool.removeAttribute('aria-grabbing'));
+
+  // allow drop on canvas
+  canvas.addEventListener('dragover', ev => ev.preventDefault());
+  canvas.addEventListener('drop', ev => {
+    ev.preventDefault();
+    pinTool.removeAttribute('aria-grabbing');
+    if (!ev.dataTransfer.getData('text/pin')) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX - rect.left);
+    const y = (ev.clientY - rect.top);
+
+    // find images that actually contain the point (rotated test)
+    const hits = [];
+    // iterate from topmost (images drawn later are top)
+    for (let k = images.length - 1; k >= 0; k--) {
+      const imgObj = images[k];
+      const corners = rectCorners(imgObj);
+      if (pointInPoly(x, y, corners)) hits.push(imgObj);
+      if (hits.length >= 2) break;
+    }
+
+    if (hits.length >= 2) {
+      // attach a pin to the top two hits
+      const pin = { x, y, imgs: [hits[0], hits[1]] };
+      pins.push(pin);
+      // register pin on images
+      hits[0].pins.push(pin);
+      hits[1].pins.push(pin);
+      draw();
+    } else {
+      // Provide a small feedback flash if placement invalid
+      flashInvalidDrop(x, y);
+    }
+  });
+
+  function flashInvalidDrop(x,y) {
+    const t0 = performance.now();
+    const duration = 420;
+    function frame(t) {
+      const p = (t - t0) / duration;
+      if (p >= 1) { draw(); return; }
+      draw();
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x,y,28*(1-p),0,Math.PI*2);
+      ctx.fillStyle = `rgba(255,50,50,${0.35*(1-p)})`;
+      ctx.fill();
+      ctx.restore();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // Interaction: drag to move (if unpinned), or rotate about nearest pin if pinned
+  let state = { dragging: null, mode: null, pivot: null, startMouseAngle:0, startCenterVec:[0,0], startAngle:0, lastMouse: {x:0,y:0} };
+
+  function topImageAt(x,y) {
+    for (let i = images.length - 1; i >= 0; i--) {
+      const obj = images[i];
+      if (pointInPoly(x, y, rectCorners(obj))) return obj;
+    }
+    return null;
+  }
+
+  canvas.addEventListener('mousedown', ev => {
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    state.lastMouse = {x,y};
+
+    // check if clicked on a pin
+    for (const p of pins.slice().reverse()) {
+      const dx = x - p.x, dy = y - p.y;
+      if (dx*dx + dy*dy <= 10*10) {
+        // clicked a pin — we do not move pins (fixed). Instead, select for rotating an attached image if any
+        // pick topmost image among images attached to this pin to rotate (images last in list drawn on top)
+        const imgsAtPin = p.imgs.slice();
+        // reorder by draw order: topmost drawn later -> higher index
+        imgsAtPin.sort((a,b) => images.indexOf(a) - images.indexOf(b));
+        const imgToRotate = imgsAtPin.length ? imgsAtPin[imgsAtPin.length-1] : null;
+        if (imgToRotate) {
+          startRotate(imgToRotate, p, x, y);
+        }
+        return;
+      }
+    }
+
+    // otherwise click on image?
+    const hit = topImageAt(x,y);
+    if (!hit) return;
+
+    // bring hit to front (so it draws on top while dragging)
+    const idx = images.indexOf(hit);
+    images.splice(idx,1);
+    images.push(hit);
+
+    if (hit.pins.length > 0) {
+      // choose nearest pin attached to this image as pivot
+      let nearest = null; let md = Infinity;
+      for (const p of hit.pins) {
+        const d = (p.x - x)*(p.x - x) + (p.y - y)*(p.y - y);
+        if (d < md) { md = d; nearest = p; }
+      }
+      startRotate(hit, nearest, x, y);
+    } else {
+      // start translate
+      state.mode = 'translate';
+      state.dragging = hit;
+      state.dragOffset = { x: hit.x - x, y: hit.y - y };
+    }
+  });
+
+  function startRotate(imgObj, pin, mouseX, mouseY) {
+    state.mode = 'rotate';
+    state.dragging = imgObj;
+    state.pivot = pin;
+    state.startMouseAngle = Math.atan2(mouseY - pin.x*0 + (mouseY - pin.y), mouseX - pin.x*0 + (mouseX - pin.x)); // placeholder - replaced below
+    // compute correctly:
+    state.startMouseAngle = Math.atan2(mouseY - pin.y, mouseX - pin.x);
+    state.startAngle = imgObj.angle;
+    state.startCenterVec = [ imgObj.x - pin.x, imgObj.y - pin.y ];
+  }
+
+  // mousemove & mouseup
+  window.addEventListener('mousemove', ev => {
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+
+    if (!state.mode) return;
+    if (state.mode === 'translate' && state.dragging) {
+      const img = state.dragging;
+      img.x = x + state.dragOffset.x;
+      img.y = y + state.dragOffset.y;
+      draw();
+    } else if (state.mode === 'rotate' && state.dragging && state.pivot) {
+      const pivot = state.pivot;
+      const img = state.dragging;
+      const startMouseAngle = state.startMouseAngle;
+      const curMouseAngle = Math.atan2(y - pivot.y, x - pivot.x);
+      const delta = curMouseAngle - startMouseAngle;
+      const newAngle = state.startAngle + delta;
+      img.angle = newAngle;
+      // rotate center vector by delta and update center
+      const [sx, sy] = state.startCenterVec;
+      const [rx, ry] = rotateVec([sx, sy], delta);
+      img.x = pivot.x + rx;
+      img.y = pivot.y + ry;
+      draw();
+    }
+  });
+
+  window.addEventListener('mouseup', ev => {
+    state.mode = null;
+    state.dragging = null;
+    state.pivot = null;
+  });
+
+  // initial size
+  // create a friendly css-sized canvas container and then set internal pixel size by resize()
+  function init() {
+    // we want canvas sized to #canvasWrap
+    const r = wrap.getBoundingClientRect();
+    canvas.style.width = r.width + 'px';
+    canvas.style.height = r.height + 'px';
+    resize();
+    draw();
+  }
+  init();
+
+  // small helper to keep canvas responsive if parent size changes
+  const ro = new ResizeObserver(() => { setCanvasSizeToWrap(); resize(); });
+  ro.observe(wrap);
+
+})();
+</script>
+</body>
+</html>
