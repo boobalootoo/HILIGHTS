@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boundless Books Creator</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f3e9;
+        }
+
+        .book-display {
+            position: relative;
+            background-color: #fff;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease-in-out;
+            border-radius: 1.5rem;
+            min-height: 400px;
+            height: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        
+        .text-art {
+            font-family: monospace;
+            font-size: 0.15rem;
+            line-height: 0.2rem;
+            color: #333;
+            user-select: text;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            opacity: 0.8;
+            max-width: 100%;
+            max-height: 100%;
+            overflow: hidden;
+            text-align: left;
+            padding-bottom: 2rem;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        /* Responsive styles for smaller screens */
+        @media (max-width: 768px) {
+            .book-display {
+                min-height: 300px;
+                padding: 1rem;
+            }
+            .text-art {
+                font-size: 0.1rem;
+                line-height: 0.15rem;
+            }
+        }
+    </style>
+</head>
+<body class="bg-stone-100 p-8 flex flex-col items-center justify-center min-h-screen">
+
+    <div class="max-w-4xl w-full mx-auto p-8 bg-white rounded-3xl shadow-xl">
+        <h1 class="text-4xl sm:text-5xl font-extrabold text-center text-rose-800 tracking-tight leading-tight mb-4">
+            Boundless Books
+        </h1>
+        <p class="text-center text-gray-600 mb-8">
+            Select a public domain book and upload an image to generate text art.
+        </p>
+        
+        <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
+            <select id="bookSelect" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-xl p-3 focus:ring-rose-500 focus:border-rose-500 transition-colors duration-200">
+                <option value="pride_prejudice" selected>Pride and Prejudice</option>
+                <option value="moby_dick">Moby Dick</option>
+                <option value="alice_wonderland">Alice's Adventures in Wonderland</option>
+            </select>
+            <label for="imageUpload" class="cursor-pointer bg-fuchsia-500 hover:bg-fuchsia-600 text-white font-bold py-3 px-6 rounded-xl shadow-lg transition-transform duration-200 transform hover:scale-105">
+                Upload Image
+            </label>
+            <input type="file" id="imageUpload" accept="image/*" class="hidden">
+            <button id="generateBtn" class="bg-rose-500 hover:bg-rose-600 text-white font-bold py-3 px-6 rounded-xl shadow-lg transition-transform duration-200 transform hover:scale-105">
+                Generate
+            </button>
+        </div>
+
+        <!-- Density and Invert Controls -->
+        <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
+            <div class="flex items-center space-x-2">
+                <label for="densitySlider" class="text-gray-600 whitespace-nowrap">Text Density:</label>
+                <input type="range" id="densitySlider" min="0" max="255" value="120" class="w-40 accent-rose-500">
+            </div>
+            <div class="flex items-center space-x-2">
+                <input type="checkbox" id="invertToggle" class="w-4 h-4 text-rose-600 bg-gray-100 rounded border-gray-300 focus:ring-rose-500 focus:ring-2">
+                <label for="invertToggle" class="text-gray-600">Invert</label>
+            </div>
+        </div>
+
+        <div id="bookDisplayContainer" class="book-display relative">
+            <canvas id="hiddenCanvas" class="hidden"></canvas>
+            <pre id="textArtDisplay" class="text-art">
+                <p class="book-title absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-2xl font-semibold text-rose-900 text-center">
+                    Welcome to Boundless Books!
+                    <br><br>
+                    Select a book, upload an image, and click "Generate" to begin.
+                </p>
+            </pre>
+        </div>
+
+        <div class="mt-8 text-center text-gray-500">
+            <p>
+                This app uses excerpts from books found on <a href="https://www.gutenberg.org/" target="_blank" class="text-rose-600 hover:underline font-medium transition-colors duration-200">Project Gutenberg</a>, a fantastic resource for public domain literature.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Data for public domain books. Using excerpts to keep the file size small.
+        const bookData = {
+            pride_prejudice: `It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife. However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so well fixed in the minds of the surrounding families, that he is considered the rightful property of some one or other of their daughters. “My dear Mr. Bennet,” said his lady to him one day, “have you heard that Netherfield Park is let at last?” Mr. Bennet replied that he had not. “But it is,” returned she; “for Mrs. Long has just been here, and she told me all about it.” Mr. Bennet made no answer. “Do you not want to know who has taken it?” cried his wife impatiently. “You want to tell me, and I have no objection to hearing it.” This was invitation enough. “Why, my dear, you must know, Mrs. Long says that Netherfield is taken by a young man of large fortune from the north of England; that he came down on Monday in a chaise and four to see the place, and was so much delighted with it, that he agreed with Mr. Morris immediately; that he is to take possession before Michaelmas, and some of his servants are to be in the house by the end of next week.`,
+            moby_dick: `Call me Ishmael. Some years ago—never mind how long precisely—having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation. Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; whenever I find myself involuntarily pausing before coffin warehouses, and bringing up the rear of every funeral I meet; and especially whenever my hypos get such an upper hand of me, that it requires a strong moral principle to prevent me from deliberately stepping into the street, and methodically knocking people’s hats off—then, I account it high time to get to sea as soon as I can. This is my substitute for pistol and ball. With a philosophical flourish Cato throws himself upon his sword; I quietly take to the ship. There is nothing surprising in this. If they but knew it, almost all men in their degree, some time or other, cherish very nearly the same feelings towards the ocean with me.`,
+            alice_wonderland: `Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, "and what is the use of a book," thought Alice "without pictures or conversations?" So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her. There was nothing so very remarkable in that; nor did Alice think it so very much out of the way to hear the Rabbit say to itself, "Oh dear! Oh dear! I shall be late!" (when she thought it over afterwards, it occurred to her that she ought to have wondered at this, but at the time it all seemed quite natural); but when the Rabbit actually took a watch out of its waistcoat-pocket, and looked at it, and then hurried on, Alice started to her feet, for it flashed across her mind that she had never before seen a rabbit with either a waistcoat-pocket, or a watch to take out of it, and burning with curiosity, she ran across the field after it, and fortunately was just in time to see it pop down a large rabbit-hole under the hedge. `
+        };
+
+        const bookSelect = document.getElementById('bookSelect');
+        const imageUpload = document.getElementById('imageUpload');
+        const generateBtn = document.getElementById('generateBtn');
+        const textArtDisplay = document.getElementById('textArtDisplay');
+        const hiddenCanvas = document.getElementById('hiddenCanvas');
+        const ctx = hiddenCanvas.getContext('2d');
+        const densitySlider = document.getElementById('densitySlider');
+        const invertToggle = document.getElementById('invertToggle');
+
+        let uploadedImage = null;
+
+        // Event listener for image upload
+        imageUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    uploadedImage = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Event listener for the generate button
+        generateBtn.addEventListener('click', () => {
+            if (!uploadedImage) {
+                textArtDisplay.innerHTML = `<p class="book-title absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-2xl font-semibold text-rose-900 text-center">
+                    Please upload an image first.
+                </p>`;
+                return;
+            }
+
+            const selectedBook = bookSelect.value;
+            const textContent = bookData[selectedBook];
+            const densityThreshold = densitySlider.value;
+            const isInverted = invertToggle.checked;
+            
+            const img = new Image();
+            img.onload = () => {
+                const aspectRatio = img.width / img.height;
+                const canvasWidth = 80;
+                const canvasHeight = Math.floor(canvasWidth / aspectRatio);
+
+                hiddenCanvas.width = canvasWidth;
+                hiddenCanvas.height = canvasHeight;
+
+                ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight);
+                const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+                const data = imageData.data;
+                
+                let textIndex = 0;
+                let outputText = "";
+                
+                for (let y = 0; y < canvasHeight; y++) {
+                    for (let x = 0; x < canvasWidth; x++) {
+                        const i = (y * canvasWidth + x) * 4;
+                        const r = data[i];
+                        const g = data[i + 1];
+                        const b = data[i + 2];
+                        const brightness = (r + g + b) / 3;
+
+                        let isTextPixel = brightness < densityThreshold;
+                        if (isInverted) {
+                            isTextPixel = !isTextPixel;
+                        }
+
+                        if (isTextPixel) {
+                            if (textIndex < textContent.length) {
+                                outputText += textContent[textIndex];
+                                textIndex++;
+                            } else {
+                                // Restart text if we run out of characters
+                                textIndex = 0;
+                                outputText += textContent[textIndex];
+                                textIndex++;
+                            }
+                        } else { // Lighter pixel
+                            outputText += ' ';
+                        }
+                    }
+                    outputText += '\n'; // Add a newline at the end of each row
+                }
+                
+                textArtDisplay.textContent = outputText;
+            };
+            img.src = uploadedImage;
+        });
+
+    </script>
+</body>
+</html>
