@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Lost Wax Casting — Interactive Simulation</title>
+  <style>
+    :root{--bg:#0f172a;--card:#0b1220;--accent:#f59e0b;--muted:#94a3b8;--glass:rgba(255,255,255,0.06)}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,var(--bg),#071025);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:24px}
+    .app{width:1100px;max-width:98vw;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:18px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+    .header{display:flex;align-items:center;gap:12px}
+    h1{margin:0;font-size:20px}
+    .cols{display:grid;grid-template-columns:430px 1fr;gap:16px;margin-top:12px}
+    .panel{background:var(--card);border-radius:10px;padding:12px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.02)}
+    .stage-list{display:flex;flex-direction:column;gap:8px}
+    .stage{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;cursor:pointer}
+    .stage.active{background:var(--glass);border:1px solid rgba(255,255,255,0.03)}
+    .controls{display:flex;gap:8px;align-items:center;margin-top:8px}
+    button{background:linear-gradient(180deg,#152238,#0d1730);border:1px solid rgba(255,255,255,0.04);color:var(--accent);padding:8px 12px;border-radius:8px;cursor:pointer}
+    button.secondary{color:#cbd5e1;background:transparent}
+    .canvas-wrap{display:flex;flex-direction:column;gap:8px;height:620px}
+    .viewport{flex:1;display:flex;align-items:center;justify-content:center;border-radius:10px;overflow:hidden;position:relative}
+    #scene{width:100%;height:100%;background:linear-gradient(180deg,#0b1220,#061423);display:block}
+    .hud{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.35);backdrop-filter:blur(6px);padding:8px;border-radius:8px;font-size:13px}
+    .toolbar{display:flex;gap:8px;align-items:center}
+    .slider{width:160px}
+    .note{font-size:13px;color:var(--muted);margin-top:8px}
+    .step-desc{font-size:13px;color:var(--muted);margin-top:6px}
+    /* simple visual elements inside the canvas */
+    .stage-svg{width:100%;height:100%}
+    .wax{fill:#ffd8a8;stroke:#c57d2c;stroke-width:2}
+    .mold{fill:#e6eef820;mix-blend-mode:multiply}
+    .metal{fill:#e6e6e6;stroke:#cfcfcf;stroke-width:1}
+    .glow{filter:drop-shadow(0 8px 18px rgba(245,158,11,0.18))}
+    .hidden{display:none}
+    .small{font-size:12px;color:var(--muted)}
+    footer{margin-top:12px;color:var(--muted);font-size:13px}
+    .row{display:flex;gap:8px;align-items:center}
+    .stat{background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:6px;font-size:13px}
+    .badge{background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:999px;font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="app" role="application">
+    <div class="header">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20" stroke="#f59e0b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <h1>Lost Wax Casting — Interactive Simulation</h1>
+        <div class="small">Simulate wax sculpting, investing, burnout, pouring and finishing.</div>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:600">Stages</div>
+          <div class="badge" id="speedBadge">Speed ×1</div>
+        </div>
+
+        <div class="stage-list" id="stages">
+          <div class="stage active" data-step="0"><strong>1. Sculpt Wax</strong><div class="small">Draw & sculpt a wax model</div></div>
+          <div class="stage" data-step="1"><strong>2. Invest (Make Mold)</strong><div class="small">Immerse wax in investment plaster</div></div>
+          <div class="stage" data-step="2"><strong>3. Burnout</strong><div class="small">Heat to remove wax leaving a cavity</div></div>
+          <div class="stage" data-step="3"><strong>4. Pour Metal</strong><div class="small">Pour molten metal into the cavity</div></div>
+          <div class="stage" data-step="4"><strong>5. Reveal & Finish</strong><div class="small">Break the mold and clean the piece</div></div>
+        </div>
+
+        <div class="controls">
+          <button id="prevBtn" class="secondary">◀ Prev</button>
+          <button id="nextBtn">Next ▶</button>
+          <div style="flex:1"></div>
+          <div class="toolbar">
+            <label class="small">Speed</label>
+            <input type="range" id="speed" min="0.5" max="3" step="0.25" value="1" class="slider">
+          </div>
+        </div>
+
+        <div class="note">Tip: On mobile, sculpt by tapping & dragging on the wax area. Use Undo to remove last stroke.</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button id="undo">Undo</button>
+          <button id="reset">Reset</button>
+          <button id="export">Export SVG</button>
+        </div>
+
+        <div class="step-desc" id="stepDesc">Sculpt a wax model by drawing on the left canvas — this represents carving detail.</div>
+      </div>
+
+      <div class="panel canvas-wrap">
+        <div class="viewport">
+          <svg id="scene" class="stage-svg" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet">
+            <!-- Background table and furnace area -->
+            <rect x="0" y="0" width="1000" height="640" fill="url(#bg)" />
+            <defs>
+              <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#071423" />
+                <stop offset="1" stop-color="#04111b" />
+              </linearGradient>
+            </defs>
+
+            <!-- Wax area (left) -->
+            <g id="waxGroup" transform="translate(60,80)">
+              <rect x="0" y="0" width="420" height="480" rx="10" fill="#071826" stroke="#072533" />
+              <g id="waxVisual">
+                <!-- placeholder for sculpted wax paths (inserted by JS) -->
+              </g>
+              <rect x="18" y="18" width="384" height="444" rx="6" fill="#0b1f26" stroke="#102b34" />
+              <text x="210" y="28" font-size="13" fill="#94a3b8" text-anchor="middle">Wax Workspace</text>
+            </g>
+
+            <!-- Mold area (center) -->
+            <g id="moldGroup" transform="translate(510,80)">
+              <rect x="0" y="0" width="430" height="300" rx="10" fill="#071826" stroke="#072533" />
+              <g id="moldVisual" transform="translate(24,36)">
+                <rect x="0" y="0" width="382" height="228" rx="6" fill="#0b1720" stroke="#0f2630"/>
+                <text x="191" y="16" font-size="13" fill="#94a3b8" text-anchor="middle">Investment Mold</text>
+                <g id="renderedCavity"></g>
+              </g>
+            </g>
+
+            <!-- Furnace/pour area (bottom-right) -->
+            <g id="pourGroup" transform="translate(510,400)">
+              <rect x="0" y="0" width="430" height="180" rx="10" fill="#071826" stroke="#072533" />
+              <text x="215" y="20" font-size="13" fill="#94a3b8" text-anchor="middle">Furnace & Pour</text>
+
+              <g transform="translate(24,36)">
+                <rect x="0" y="0" width="120" height="100" rx="6" fill="#021018" stroke="#072533" />
+                <text x="60" y="52" font-size="12" fill="#94a3b8" text-anchor="middle">Kiln</text>
+                <g id="flame" transform="translate(12,12)"></g>
+              </g>
+
+              <g id="pourStream" transform="translate(180,36)"></g>
+
+              <g transform="translate(320,36)">
+                <rect x="0" y="0" width="82" height="64" rx="6" fill="#08121a" stroke="#0f2430" />
+                <text x="41" y="36" font-size="12" fill="#94a3b8" text-anchor="middle">Crucible</text>
+              </g>
+            </g>
+
+            <!-- Reveal area (top-center small) -->
+            <g id="revealGroup" transform="translate(380,12)">
+              <rect x="0" y="0" width="240" height="56" rx="8" fill="#06202a" stroke="#0b3540"/>
+              <text x="120" y="34" font-size="13" fill="#cfe8ff" text-anchor="middle">Result Preview</text>
+              <g id="finalPreview" transform="translate(92,10)"></g>
+            </g>
+
+          </svg>
+
+          <div class="hud" id="hud">Stage: <strong id="hudStage">Sculpt Wax</strong></div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="row">
+            <div class="stat">Steps: <span id="stepNum">1/5</span></div>
+            <div class="stat">Action: <span id="actionName">Draw</span></div>
+          </div>
+          <div class="row">
+            <div class="small">Made with simulated physics & SVG. Not for production use.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer>Interactive educational sim — try sculpting a simple ring, pendant or shape and progress through the stages.</footer>
+  </div>
+
+  <script>
+    // Simple lost-wax casting sim logic
+    const stages = ['Sculpt Wax','Invest','Burnout','Pour Metal','Reveal & Finish'];
+    let step = 0;
+    let speed = 1;
+
+    const stageEls = document.querySelectorAll('.stage');
+    const hudStage = document.getElementById('hudStage');
+    const stepNum = document.getElementById('stepNum');
+    const actionName = document.getElementById('actionName');
+    const stepDesc = document.getElementById('stepDesc');
+    const speedEl = document.getElementById('speed');
+    const speedBadge = document.getElementById('speedBadge');
+
+    // SVG containers
+    const waxVisual = document.getElementById('waxVisual');
+    const renderedCavity = document.getElementById('renderedCavity');
+    const pourStream = document.getElementById('pourStream');
+    const flame = document.getElementById('flame');
+    const finalPreview = document.getElementById('finalPreview');
+
+    // Wax drawing canvas using SVG paths
+    let drawing = false;
+    let pathData = [];
+    let undoStack = [];
+
+    // Helpers
+    function setStep(s){
+      step = Math.max(0,Math.min(s,stages.length-1));
+      stageEls.forEach(el=>el.classList.toggle('active', Number(el.dataset.step)===step));
+      hudStage.textContent = stages[step];
+      stepNum.textContent = (step+1)+'/'+stages.length;
+      updateUIForStep();
+    }
+
+    function updateUIForStep(){
+      // describe
+      const desc = [
+        'Sculpt a wax model by drawing on the wax workspace. Use Undo to remove strokes.',
+        'Make the investment: the wax model is embedded in plaster (simulated). Click Next to let it set.',
+        'Burnout: the kiln heats up and the wax is removed leaving a cavity. Watch the wax vanish.',
+        'Pour molten metal into the cavity. You will see a molten stream fill the cavity.',
+        'Reveal the casting by breaking the mold. Clean off sprues and polish in the preview.'
+      ];
+      stepDesc.textContent = desc[step];
+
+      // action name
+      actionName.textContent = (step===0) ? 'Draw / Sculpt' : (step===1) ? 'Set / Hardening' : (step===2) ? 'Heat' : (step===3) ? 'Pour' : 'Clean & Polish';
+
+      // show/hide interactive bits
+      document.getElementById('waxGroup').style.opacity = (step<=1)?1:0.4;
+      document.getElementById('moldGroup').style.opacity = (step>=1)?1:0.6;
+      document.getElementById('pourGroup').style.opacity = (step>=2)?1:0.6;
+
+      // stage specific actions
+      if(step===1){
+        // transfer wax to mold as a silhouette (simulate setting time)
+        renderMoldFromWax();
+      }
+      if(step===2){
+        startBurnoutAnimation();
+      }
+      if(step===3){
+        startPourAnimation();
+      }
+      if(step===4){
+        revealFinal();
+      }
+
+      document.getElementById('hud').classList.remove('glow');
+    }
+
+    // Stage click handlers
+    document.getElementById('prevBtn').addEventListener('click',()=>setStep(step-1));
+    document.getElementById('nextBtn').addEventListener('click',()=>setStep(step+1));
+    document.getElementById('speed').addEventListener('input',(e)=>{speed = Number(e.target.value); speedBadge.textContent = 'Speed ×'+speed;});
+
+    stageEls.forEach(el=>el.addEventListener('click',()=>setStep(Number(el.dataset.step))));
+
+    // Drawing on SVG for the wax model
+    const scene = document.getElementById('scene');
+    const waxBox = {x:78,y:98,w:384,h:444}; // coordinates from transform
+
+    function getPointer(evt){
+      const pt = scene.createSVGPoint();
+      if(evt.touches) evt = evt.touches[0];
+      pt.x = evt.clientX; pt.y = evt.clientY;
+      const ctm = scene.getScreenCTM().inverse();
+      return pt.matrixTransform(ctm);
+    }
+
+    scene.addEventListener('pointerdown',(e)=>{
+      if(step!==0) return; // only sculpt in wax step
+      drawing = true; const p = getPointer(e);
+      if(p.x < waxBox.x || p.x > waxBox.x+waxBox.w || p.y < waxBox.y || p.y > waxBox.y+waxBox.h) return;
+      pathData.push(['M',p.x - waxBox.x, p.y - waxBox.y]);
+      undoStack.push([]);
+    });
+    scene.addEventListener('pointermove',(e)=>{
+      if(!drawing) return;
+      const p = getPointer(e);
+      const last = pathData[pathData.length-1];
+      if(!last) return;
+      last.push('L', p.x - waxBox.x, p.y - waxBox.y);
+      // render current path as temporary
+      renderWaxPaths();
+      undoStack[undoStack.length-1].push([p.x - waxBox.x, p.y - waxBox.y]);
+    });
+    ['pointerup','pointercancel','pointerleave'].forEach(ev=>scene.addEventListener(ev,()=>{drawing=false;}));
+
+    function renderWaxPaths(){
+      // clear waxVisual
+      waxVisual.innerHTML = '';
+      // background wax blob
+      const bg = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      bg.setAttribute('x',22); bg.setAttribute('y',22); bg.setAttribute('width',380); bg.setAttribute('height',440); bg.setAttribute('rx',6);
+      bg.setAttribute('fill','#ffd7a3'); bg.setAttribute('opacity','0.12');
+      waxVisual.appendChild(bg);
+
+      // render each path
+      for(const seg of pathData){
+        const d = seg.join(' ');
+        const p = document.createElementNS('http://www.w3.org/2000/svg','path');
+        p.setAttribute('d', d.replace(/(\d+\.?\d*)/g, (m)=>Number(m).toFixed(1)));
+        p.setAttribute('transform','translate(18,18)');
+        p.setAttribute('class','wax');
+        p.setAttribute('stroke-linecap','round');
+        p.setAttribute('stroke-linejoin','round');
+        p.setAttribute('fill','none');
+        p.setAttribute('stroke-width','12');
+        waxVisual.appendChild(p);
+      }
+    }
+
+    document.getElementById('undo').addEventListener('click',()=>{
+      if(undoStack.length===0) return;
+      undoStack.pop(); pathData.pop(); renderWaxPaths();
+    });
+    document.getElementById('reset').addEventListener('click',()=>{pathData=[]; undoStack=[]; renderWaxPaths(); renderedCavity.innerHTML=''; finalPreview.innerHTML='';});
+
+    document.getElementById('export').addEventListener('click',()=>{
+      // export combined wax as standalone SVG for download
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 420 480'>`+waxVisual.innerHTML+`</svg>`;
+      const blob = new Blob([svg],{type:'image/svg+xml'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'wax-model.svg'; a.click(); URL.revokeObjectURL(url);
+    });
+
+    // Transfer wax silhouette into mold (simple simplified approach)
+    function renderMoldFromWax(){
+      renderedCavity.innerHTML = '';
+      if(pathData.length===0){
+        const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+        t.setAttribute('x',191); t.setAttribute('y',116); t.setAttribute('text-anchor','middle'); t.setAttribute('fill','#94a3b8'); t.setAttribute('font-size','13');
+        t.textContent = 'No wax model — nothing to make a cavity from.';
+        renderedCavity.appendChild(t);
+        return;
+      }
+      // Build silhouette: create a combined path scaled to mold area
+      const scale = 0.6; const tx = 191; const ty = 114;
+      const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+      g.setAttribute('transform','translate(191,114) scale('+scale+')');
+      // combine existing paths
+      for(const seg of pathData){
+        const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+        path.setAttribute('d', seg.join(' '));
+        path.setAttribute('transform','translate(0,0)');
+        path.setAttribute('fill','#ffffff'); path.setAttribute('opacity','0.06'); path.setAttribute('stroke','#e2e8f0'); path.setAttribute('stroke-width','1');
+        g.appendChild(path);
+      }
+      // create cavity (inverted shape)
+      const cavity = document.createElementNS('http://www.w3.org/2000/svg','path');
+      cavity.setAttribute('d','M-180 -90 h360 v180 h-360 z');
+      cavity.setAttribute('fill','#00121a'); cavity.setAttribute('opacity','0.85');
+      renderedCavity.appendChild(cavity);
+      renderedCavity.appendChild(g);
+
+      // a faint outline to show the cavity edges
+      const outline = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      outline.setAttribute('x',6); outline.setAttribute('y',6); outline.setAttribute('width',370); outline.setAttribute('height',214); outline.setAttribute('rx',4);
+      outline.setAttribute('fill','none'); outline.setAttribute('stroke','#0ea5a6'); outline.setAttribute('stroke-width','1'); outline.setAttribute('opacity','0.07');
+      renderedCavity.appendChild(outline);
+    }
+
+    // Burnout animation: fade wax and show kiln flame
+    function startBurnoutAnimation(){
+      // animate wick flame by adding shapes
+      flame.innerHTML = '';
+      const f1 = document.createElementNS('http://www.w3.org/2000/svg','path');
+      f1.setAttribute('d','M12 30 C10 18, 26 18, 24 30 C22 44, 12 52, 12 30 Z');
+      f1.setAttribute('fill','#ffb86b'); flame.appendChild(f1);
+      const f2 = document.createElementNS('http://www.w3.org/2000/svg','path');
+      f2.setAttribute('d','M12 30 C11 22, 20 22, 18 30 C16 38, 12 44, 12 30 Z'); f2.setAttribute('fill','#ff6a00'); flame.appendChild(f2);
+
+      // fade wax paths gradually based on speed
+      let t=0; const duration = 2000 / speed; // ms
+      const interval = 30;
+      const steps = Math.max(1, Math.floor(duration/interval));
+      const fadeStep = 1/steps;
+      const fadeInterval = setInterval(()=>{
+        t+=interval;
+        // reduce stroke-width and opacity on wax
+        const waxPaths = waxVisual.querySelectorAll('path');
+        waxPaths.forEach(p=>{
+          const sw = Number(p.getAttribute('stroke-width')) || 12;
+          const nw = Math.max(1, sw - (12*fadeStep));
+          p.setAttribute('stroke-width', nw);
+          p.setAttribute('opacity', Math.max(0, (nw/12) ));
+        });
+        if(t>=duration){ clearInterval(fadeInterval); // simulate wax gone
+          waxVisual.innerHTML = ''; // remove wax
+          // show ghost silhouette in mold (if not already)
+          renderMoldFromWax();
+        }
+      }, interval);
+    }
+
+    // Pour animation: show stream and fill cavity
+    function startPourAnimation(){
+      pourStream.innerHTML = ''; // create a stream path animation
+      const stream = document.createElementNS('http://www.w3.org/2000/svg','path');
+      stream.setAttribute('d','M40 20 C80 60, 120 60, 160 120 L160 160 L80 160 L80 120 C60 80, 40 40, 40 20 Z');
+      stream.setAttribute('fill','#ffddb3'); stream.setAttribute('opacity','0'); stream.setAttribute('id','stream');
+      pourStream.appendChild(stream);
+
+      // animate opacity and transform to simulate pour
+      let t=0; const duration = 1800 / speed; const steps = Math.max(1, Math.floor(duration/30));
+      const interval = setInterval(()=>{
+        t+=30; const p = Math.min(1, t/duration);
+        stream.setAttribute('opacity', p);
+        // scale slightly
+        stream.setAttribute('transform','translate(0,'+ (40*(1-p)).toFixed(1) +') scale('+(0.6 + 0.4*p)+')');
+        if(t>=duration){ clearInterval(interval); // fill cavity with metal (render in mold)
+          const metal = document.createElementNS('http://www.w3.org/2000/svg','g');
+          metal.innerHTML = `<ellipse cx="191" cy="114" rx="64" ry="28" fill="#e6e6e6" opacity="0.95"/>`;
+          renderedCavity.appendChild(metal);
+          // put a shining metal preview
+          finalPreview.innerHTML = `<g transform="translate(0,6)"><ellipse cx="24" cy="18" rx="24" ry="10" fill="#e6e6e6" /><text x="24" y="40" font-size="10" fill="#94a3b8" text-anchor="middle">Cooling...</text></g>`;
+          setTimeout(()=>{ finalPreview.innerHTML = `<g transform="translate(0,6)"><ellipse cx="24" cy="18" rx="24" ry="10" fill="#cfcfcf" /><text x="24" y="40" font-size="10" fill="#cfe8ff" text-anchor="middle">Casting: solid</text></g>`; }, 1200/speed);
+        }
+      },30);
+    }
+
+    function revealFinal(){
+      // simulate breaking mold and showing cleaned piece
+      finalPreview.innerHTML = '';
+      const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+      g.innerHTML = `
+        <g transform="translate(0,0)">
+          <path d="M24 8 C34 6,46 6,54 18 C62 30,46 44,24 46 C12 48,6 36,12 24 C16 14,22 10,24 8 Z" fill="#d6d6d6" stroke="#bfbfbf" stroke-width="1"/>
+          <text x="24" y="64" font-size="9" text-anchor="middle" fill="#94a3b8">Polished Casting</text>
+        </g>`;
+      finalPreview.appendChild(g);
+
+      // add a label in mold area
+      const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+      t.setAttribute('x',191); t.setAttribute('y',170); t.setAttribute('font-size','12'); t.setAttribute('fill','#cfe8ff'); t.setAttribute('text-anchor','middle');
+      t.textContent = 'Mold broken — piece revealed';
+      renderedCavity.appendChild(t);
+    }
+
+    // initial render
+    renderWaxPaths(); setStep(0);
+
+  </script>
+</body>
+</html>
