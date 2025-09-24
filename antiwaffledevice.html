@@ -1,0 +1,350 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Filler Remover — Paste text and clean it</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#60a5fa;--muted:#94a3b8;--glass:rgba(255,255,255,0.03)}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial}
+    body{background:linear-gradient(180deg,#071022 0%, #071733 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:24px}
+    .wrap{width:100%;max-width:1100px}
+    header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+    h1{margin:0;font-size:20px}
+    p.lead{margin:0;color:var(--muted);font-size:13px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 8px 30px rgba(2,6,23,0.6);}
+    textarea{width:100%;height:220px;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit;resize:vertical;font-size:14px}
+    .controls{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+    button,select,input[type=checkbox]{cursor:pointer}
+    button{background:linear-gradient(180deg,var(--accent),#3b82f6);border:none;padding:10px 12px;border-radius:8px;color:#011028;font-weight:600}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted);padding:9px 12px}
+    .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .small{font-size:13px;color:var(--muted)}
+    .stats{display:flex;gap:12px;align-items:center;margin-top:10px;color:var(--muted)}
+    .output{white-space:pre-wrap;padding:12px;border-radius:8px;border:1px dashed rgba(255,255,255,0.03);height:220px;overflow:auto;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent)}
+    mark.removed{background:rgba(99,102,241,0.18);color:#e6eef8;padding:0 2px;border-radius:3px}
+    footer{margin-top:12px;color:var(--muted);font-size:13px}
+    @media (max-width:880px){.cols{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="card" style="padding:10px 12px">
+        <h1>Filler Remover</h1>
+        <p class="lead">Paste text on the left and remove or replace filler words and wordy phrases.</p>
+      </div>
+    </header><div class="card">
+  <div class="cols">
+    <div>
+      <label class="small">Input text</label>
+      <textarea id="input" placeholder="Paste or type text here..."></textarea>
+
+      <div class="controls">
+        <button id="cleanBtn">Clean text</button>
+        <button id="highlightBtn" class="btn-ghost">Show highlights</button>
+        <button id="copyBtn" class="btn-ghost">Copy cleaned</button>
+        <button id="resetBtn" class="btn-ghost">Reset</button>
+        <label style="display:inline-flex;align-items:center;gap:8px;color:var(--muted)">
+          <input type="checkbox" id="replaceMode"> Replace with suggestions
+        </label>
+      </div>
+
+      <div class="stats" id="stats">
+        <div id="removedCount">Removed: 0</div>
+        <div id="changedCount">Changed: 0</div>
+        <div id="timeTaken"></div>
+      </div>
+
+    </div>
+
+    <div>
+      <label class="small">Output</label>
+      <div id="output" class="output"></div>
+
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <button id="downloadBtn" class="btn-ghost">Download .txt</button>
+        <button id="downloadCsvBtn" class="btn-ghost">Download log (.csv)</button>
+        <div style="flex:1;text-align:right;color:var(--muted);font-size:13px">Mode: <span id="modeLabel">Remove fillers</span></div>
+      </div>
+    </div>
+  </div>
+  <footer>
+    Tip: toggle "Replace with suggestions" to substitute concise alternatives instead of removing. The tool uses case-insensitive, whole-word and phrase-aware matching.
+  </footer>
+</div>
+
+  </div>  <script>
+    // Expanded filler list (phrase -> concise alternative). Empty replacement means delete.
+    const fillerList = [
+      ["due to the fact that","because"],
+      ["in order to","to"],
+      ["for all intents and purposes",""] ,
+      ["at the end of the day","ultimately"],
+      ["in my opinion",""],
+      ["the fact that","that"],
+      ["needless to say",""],
+      ["as a matter of fact","in fact"],
+      ["each and every","each"],
+      ["first and foremost","first"],
+      ["whether or not","whether"],
+      ["in terms of",""],
+      ["with regard to","about"],
+      ["it should be noted that",""],
+      ["at this point in time","now"],
+      ["a number of","many"],
+      ["at the present moment","now"],
+      ["the reason why","the reason"],
+      ["end result","result"],
+      ["past history","history"],
+      ["close proximity","proximity"],
+      ["advance planning","planning"],
+      ["unexpected surprise","surprise"],
+      ["it is important to note that",""],
+      ["there is no doubt that",""],
+      ["it seems that","it seems"],
+      ["i think that","i think"],
+      ["i believe that","i believe"],
+      ["at this juncture","now"],
+      ["by means of","by"],
+      ["in the event that","if"],
+      ["by virtue of","because of"],
+      ["for the purpose of","for"],
+      ["with the exception of","except"],
+      ["owing to the fact that","because"],
+      ["on account of","because"],
+      ["make use of","use"],
+      ["give consideration to","consider"],
+      ["reach a conclusion","conclude"],
+      ["with a view to","to"],
+      ["be in possession of","have"],
+      ["carry out","do"],
+      ["conduct an investigation","investigate"],
+      ["perform an analysis","analyze"],
+      ["come to an agreement","agree"],
+      ["put in place","implement"],
+      ["bring to the table","offer"],
+      ["move forward","proceed"],
+      ["going forward",""],
+      ["circle back","return"],
+      ["touch base","contact"],
+      ["at this moment in time","now"],
+      ["for the time being","now"],
+      ["until such time as","until"],
+      ["in the process of",""],
+      ["has the ability to","can"],
+      ["is able to","can"],
+      ["make a decision","decide"],
+      ["give a presentation","present"],
+      ["at all times","always"],
+      ["on a daily basis","daily"],
+      ["on a regular basis","regularly"],
+      ["on the grounds that","because"],
+      ["in consequence of","because of"],
+      ["a large number of","many"],
+      ["a small number of","few"],
+      ["a great deal of","much"],
+      ["for the most part","mostly"],
+      ["all of a sudden","suddenly"],
+      ["as to whether","whether"],
+      ["each individual","each"],
+      ["true facts","facts"],
+      ["basic fundamentals","fundamentals"],
+      ["completely unanimous","unanimous"],
+      ["free gift","gift"],
+      ["consensus of opinion","consensus"],
+      ["refer back","refer"],
+      ["plan ahead","plan"],
+      ["at the present juncture","now"],
+      ["as yet","yet"],
+      ["at such time as","when"],
+      ["with the passage of time","over time"],
+      ["at the present stage","now"],
+      ["during the course of","during"],
+      ["at that point in time","then"],
+      ["for the purpose of","for"],
+      ["make contact with","contact"],
+      ["lend assistance to","help"],
+      ["render assistance to","help"],
+      ["give assistance to","help"],
+      ["despite the fact that","although"],
+      ["prior to","before"],
+      ["subsequent to","after"],
+      ["for the duration of","during"],
+      ["in close proximity to","near"],
+      ["in connection with","about"],
+      ["for the reason that","because"],
+      ["with respect to","about"],
+      ["as a general rule","generally"],
+      ["in light of","because of"],
+      ["in view of","because of"],
+      ["in accordance with","under"],
+      ["with reference to","about"],
+      ["be of the opinion","believe"],
+      ["have the capacity to","can"],
+      ["be in a position to","can"],
+      // single-word fillers (use whole-word matching)
+      ["just",""],
+      ["really",""],
+      ["very",""],
+      ["actually",""],
+      ["basically",""],
+      ["literally",""],
+      ["totally",""],
+      ["completely",""],
+      ["absolutely",""],
+      ["kind of",""],
+      ["sort of",""],
+      ["somewhat",""],
+      ["perhaps",""],
+      ["maybe",""],
+      ["like",""],
+      ["so",""],
+      ["well",""],
+      ["at the present time","now"]
+    ];
+
+    // Create regex list sorted by phrase length (desc) so longer phrases are replaced first
+    const regexList = fillerList
+      .map(([phrase, repl]) => ({phrase, repl, len: phrase.length}))
+      .sort((a,b)=>b.len - a.len)
+      .map(item => ({
+        ...item,
+        // escape regex special chars
+        re: new RegExp('\\b' + item.phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '\\b', 'gi')
+      }));
+
+    const inputEl = document.getElementById('input');
+    const outEl = document.getElementById('output');
+    const stats = { removed: 0, changed: 0 };
+    let lastLog = [];
+
+    function processText(text, replaceMode) {
+      const start = performance.now();
+      let changedText = text;
+      const log = [];
+
+      // For highlighting: we'll build an array of ranges removed
+      const removedRanges = [];
+
+      regexList.forEach(({phrase, repl, re}) => {
+        let match;
+        // collect matches
+        while ((match = re.exec(changedText)) !== null) {
+          const found = match[0];
+          const index = match.index;
+          const before = changedText;
+
+          if (replaceMode) {
+            // replace with repl (which might be empty)
+            changedText = before.slice(0, index) + (repl || '') + before.slice(index + found.length);
+            // adjust regex lastIndex
+            re.lastIndex = index + (repl ? repl.length : 0);
+            log.push([found, repl || '']);
+          } else {
+            // remove the match
+            changedText = before.slice(0, index) + before.slice(index + found.length);
+            re.lastIndex = index;
+            log.push([found, '']);
+          }
+        }
+      });
+
+      // collapse repeated spaces and fix spacing around punctuation
+      changedText = changedText.replace(/\s{2,}/g, ' ')
+                               .replace(/\s+([.,!?;:])/g, '$1')
+                               .trim();
+
+      const took = Math.round(performance.now() - start);
+      return {text: changedText, log, time: took};
+    }
+
+    function highlightRemoved(original, cleaned) {
+      // naive highlighting: look for removed words by diffing tokens
+      const origTokens = original.split(/(\s+|[^\w]+)/);
+      const cleanTokens = cleaned.split(/(\s+|[^\w]+)/);
+
+      // mark tokens present in orig but not in cleaned
+      const cleanStr = cleanTokens.join('');
+      let out = '';
+      let i = 0; // index into cleaned string
+      for (let t of origTokens) {
+        if (t.trim() === '') { out += t; i += t.length; continue; }
+        const nextIndex = cleanStr.indexOf(t, i);
+        if (nextIndex === -1) {
+          // token was removed
+          out += `<mark class="removed">${escapeHtml(t)}</mark>`;
+        } else {
+          out += escapeHtml(t);
+          i = nextIndex + t.length;
+        }
+      }
+      return out;
+    }
+
+    function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    document.getElementById('cleanBtn').addEventListener('click', ()=>{
+      const txt = inputEl.value || '';
+      const replaceMode = document.getElementById('replaceMode').checked;
+      const modeLabel = document.getElementById('modeLabel');
+      modeLabel.textContent = replaceMode ? 'Replace with suggestions' : 'Remove fillers';
+
+      if (!txt.trim()) return;
+      const res = processText(txt, replaceMode);
+      outEl.textContent = res.text;
+      lastLog = res.log;
+
+      const removed = res.log.filter(r=>!r[1]||r[1]==='').length;
+      const changed = res.log.length - removed;
+      document.getElementById('removedCount').textContent = `Removed: ${removed}`;
+      document.getElementById('changedCount').textContent = `Changed: ${changed}`;
+      document.getElementById('timeTaken').textContent = `Took ${res.time} ms`;
+
+    });
+
+    document.getElementById('highlightBtn').addEventListener('click', ()=>{
+      const txt = inputEl.value || '';
+      if (!txt.trim()) return;
+      const replaceMode = document.getElementById('replaceMode').checked;
+      const res = processText(txt, replaceMode);
+      const highlighted = highlightRemoved(txt, res.text);
+      outEl.innerHTML = highlighted;
+    });
+
+    document.getElementById('copyBtn').addEventListener('click', ()=>{
+      navigator.clipboard.writeText(outEl.textContent || '').then(()=>{
+        alert('Copied cleaned text to clipboard');
+      }).catch(()=>{ alert('Copy failed — please copy manually.'); });
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', ()=>{
+      inputEl.value = '';
+      outEl.textContent = '';
+      document.getElementById('removedCount').textContent = 'Removed: 0';
+      document.getElementById('changedCount').textContent = 'Changed: 0';
+      document.getElementById('timeTaken').textContent = '';
+      lastLog = [];
+    });
+
+    document.getElementById('downloadBtn').addEventListener('click', ()=>{
+      const txt = outEl.textContent || '';
+      const blob = new Blob([txt], {type:'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'cleaned.txt'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('downloadCsvBtn').addEventListener('click', ()=>{
+      if (!lastLog.length) { alert('No changes to export — please Clean text first.'); return; }
+      let csv = 'Found,Replacement\n';
+      lastLog.forEach(r=>{ csv += `"${r[0].replace(/"/g,'""')}","${(r[1]||'').replace(/"/g,'""')}"\n`; });
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'filler_log.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    });
+
+    // small helper: paste button via Ctrl+V support
+    inputEl.addEventListener('paste', ()=>{ setTimeout(()=>{ document.getElementById('removedCount').textContent = 'Removed: 0'; },50); });
+
+  </script></body>
+</html>
