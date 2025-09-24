@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URL Popups</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 100;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+            backdrop-filter: blur(5px);
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 1200px;
+            height: 90%;
+            max-height: 800px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            position: absolute;
+            top: 10px;
+            right: 15px;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .modal-iframe {
+            flex-grow: 1;
+            border-radius: 0 0 12px 12px;
+        }
+        /* Mobile-first styling */
+        @media (max-width: 768px) {
+            .grid-cols-4 {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+    </style>
+</head>
+<body class="p-8">
+
+<div class="max-w-4xl mx-auto bg-white p-6 rounded-2xl shadow-xl">
+    <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">My Favorite Links</h1>
+    <p class="text-center text-gray-600 mb-8">Click a button to open the website in a pop-up modal.</p>
+
+    <!-- Modal window -->
+    <div id="urlModal" class="modal">
+        <div class="modal-content relative shadow-2xl">
+            <div class="p-4 bg-gray-100 flex justify-between items-center rounded-t-xl">
+                <div class="flex-1 overflow-hidden">
+                     <p id="modalTitle" class="text-lg font-semibold text-gray-700 truncate"></p>
+                </div>
+                <span class="close cursor-pointer ml-4 p-2 rounded-full hover:bg-gray-200 transition-colors duration-200">&times;</span>
+            </div>
+            <iframe id="urlIframe" class="modal-iframe w-full h-full" frameborder="0"></iframe>
+        </div>
+    </div>
+
+    <!-- URL list -->
+    <div id="urlList" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        <!-- Buttons will be generated here by JavaScript -->
+    </div>
+</div>
+
+<script>
+    const urls = [
+        { title: 'Google', url: 'https://www.google.com' },
+        { title: 'Wikipedia', url: 'https://www.wikipedia.org' },
+        { title: 'GitHub', url: 'https://www.github.com' },
+        { title: 'Tailwind CSS', url: 'https://tailwindcss.com' },
+        { title: 'MDN Web Docs', url: 'https://developer.mozilla.org/en-US/' },
+        { title: 'OpenAI', url: 'https://www.openai.com' },
+        { title: 'React', url: 'https://react.dev/' },
+        { title: 'The New York Times', url: 'https://www.nytimes.com' },
+        { title: 'BBC News', url: 'https://www.bbc.com/news' },
+        { title: 'YouTube', url: 'https://www.youtube.com' }
+    ];
+
+    const urlList = document.getElementById('urlList');
+    const urlModal = document.getElementById('urlModal');
+    const urlIframe = document.getElementById('urlIframe');
+    const modalTitle = document.getElementById('modalTitle');
+    const closeBtn = document.querySelector('.close');
+
+    // Function to create and append buttons
+    function createButtons() {
+        urls.forEach(site => {
+            const button = document.createElement('button');
+            button.className = 'w-full py-3 px-4 bg-blue-500 text-white rounded-xl shadow-md hover:bg-blue-600 transition-colors duration-200 font-medium text-center truncate';
+            button.textContent = site.title;
+            button.onclick = () => {
+                urlIframe.src = site.url;
+                modalTitle.textContent = site.title;
+                urlModal.style.display = 'flex';
+            };
+            urlList.appendChild(button);
+        });
+    }
+
+    // When the user clicks on <span> (x), close the modal
+    closeBtn.onclick = function() {
+        urlModal.style.display = 'none';
+        urlIframe.src = ''; // Clear the iframe to stop video playback, etc.
+    }
+
+    // When the user clicks anywhere outside of the modal content, close it
+    window.onclick = function(event) {
+        if (event.target == urlModal) {
+            urlModal.style.display = 'none';
+            urlIframe.src = ''; // Clear the iframe
+        }
+    }
+
+    // Initial button generation
+    createButtons();
+
+</script>
+
+</body>
+</html>
+
